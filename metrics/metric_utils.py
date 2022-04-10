@@ -8,6 +8,8 @@ import uuid
 import numpy as np
 import torch
 import dnnlib
+import sys
+sys.path.append('/home/sikun/bold5k/CLIP')
 import clip
 import torchvision.transforms as T
 #----------------------------------------------------------------------------
