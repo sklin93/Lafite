@@ -5,3 +5,4 @@ datasets/COCO*
 out*
 pretrained_models*
 *tmp*
+*log*
