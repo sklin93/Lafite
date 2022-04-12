@@ -1,0 +1,568 @@
+nohup: ignoring input
+using data:  /home/sikun/NSD/data/clip_features/nsd_clip_train.json testing data:  /home/sikun/NSD/data/clip_features/nsd_clip_val.json
+
+Training options:
+{
+  "f_dim": 512,
+  "ratio": 1.0,
+  "mixing_prob": 0.0,
+  "metric_only_test": false,
+  "lam": 0.0,
+  "temp": 0.5,
+  "itd": 5.0,
+  "itc": 10.0,
+  "iid": 0.0,
+  "iic": 0.0,
+  "d_use_norm": false,
+  "d_use_fts": true,
+  "gather": false,
+  "num_gpus": 2,
+  "image_snapshot_ticks": 50,
+  "network_snapshot_ticks": 50,
+  "metrics": [
+    "fid50k_full"
+  ],
+  "random_seed": 0,
+  "training_set_kwargs": {
+    "class_name": "training.dataset.NsdClipDataset",
+    "path": "/home/sikun/NSD/data/clip_features/nsd_clip_train.json",
+    "use_mapped": "img",
+    "use_fmri": false,
+    "fmri_pad": 15744,
+    "use_clip": true,
+    "threshold": 1.5,
+    "normalize_clip": true,
+    "use_labels": false,
+    "max_size": 23715,
+    "xflip": true,
+    "ratio": 1.0,
+    "resolution": 256
+  },
+  "testing_set_kwargs": {
+    "class_name": "training.dataset.NsdClipDataset",
+    "path": "/home/sikun/NSD/data/clip_features/nsd_clip_val.json",
+    "use_mapped": "img",
+    "use_fmri": false,
+    "fmri_pad": 15744,
+    "use_clip": true,
+    "threshold": 1.5,
+    "normalize_clip": true,
+    "use_labels": false,
+    "max_size": null,
+    "xflip": true,
+    "ratio": 1.0,
+    "resolution": 256
+  },
+  "data_loader_kwargs": {
+    "pin_memory": false,
+    "num_workers": 1,
+    "prefetch_factor": 2
+  },
+  "G_kwargs": {
+    "class_name": "training.networks.Generator",
+    "z_dim": 512,
+    "w_dim": 512,
+    "m_layer_features": 512,
+    "m_num_layers": 8,
+    "mapping_kwargs": {
+      "num_layers": 8
+    },
+    "synthesis_kwargs": {
+      "channel_base": 32768,
+      "channel_max": 512,
+      "num_fp16_res": 4,
+      "conv_clamp": 256,
+      "change": 256,
+      "f_dim": 512
+    }
+  },
+  "D_kwargs": {
+    "class_name": "training.networks.Discriminator",
+    "use_norm": false,
+    "use_fts": true,
+    "block_kwargs": {},
+    "mapping_kwargs": {},
+    "epilogue_kwargs": {
+      "mbstd_group_size": 4,
+      "f_dim": 512
+    },
+    "channel_base": 32768,
+    "channel_max": 512,
+    "num_fp16_res": 4,
+    "conv_clamp": 256
+  },
+  "G_opt_kwargs": {
+    "class_name": "torch.optim.Adam",
+    "lr": 0.0025,
+    "betas": [
+      0,
+      0.99
+    ],
+    "eps": 1e-08
+  },
+  "D_opt_kwargs": {
+    "class_name": "torch.optim.Adam",
+    "lr": 0.0025,
+    "betas": [
+      0,
+      0.99
+    ],
+    "eps": 1e-08
+  },
+  "loss_kwargs": {
+    "class_name": "training.loss.StyleGAN2Loss",
+    "r1_gamma": 10.0
+  },
+  "total_kimg": 25000,
+  "batch_size": 16,
+  "batch_gpu": 8,
+  "ema_kimg": 5.0,
+  "ema_rampup": null,
+  "resume_pkl": "./pretrained_models/COCO2014_CLIP_ViTB32_all_text.pkl",
+  "ada_kimg": 100,
+  "run_dir": "./out/00001-nsd_clip_train-mirror-auto-lam0-temp0.5-map_num8-gpus2-gamma10-resumecustom"
+}
+
+Output directory:   ./out/00001-nsd_clip_train-mirror-auto-lam0-temp0.5-map_num8-gpus2-gamma10-resumecustom
+Training data:      /home/sikun/NSD/data/clip_features/nsd_clip_train.json
+Training duration:  25000 kimg
+Number of GPUs:     2
+Number of images:   23715
+Image resolution:   256
+Conditional model:  False
+Dataset x-flips:    True
+Discriminator use normalization:  False
+Discriminator use fts: True
+Creating output directory...
+Launching processes...
+Loading training set...
+
+Num images:  47430
+Image shape: [3, 256, 256]
+Label shape: [0]
+
+Constructing networks...
+Resuming from "./pretrained_models/COCO2014_CLIP_ViTB32_all_text.pkl"
+G Generator(
+  (synthesis): SynthesisNetwork(
+    (b4): SynthesisBlock(
+      (conv1): SynthesisLayer(
+        (pre_0): FullyConnectedLayer()
+        (pre_1): FullyConnectedLayer()
+        (affine_0): FullyConnectedLayer()
+      )
+      (torgb): ToRGBLayer(
+        (pre_0): FullyConnectedLayer()
+        (pre_1): FullyConnectedLayer()
+        (affine_0): FullyConnectedLayer()
+      )
+    )
+    (b8): SynthesisBlock(
+      (conv0): SynthesisLayer(
+        (pre_0): FullyConnectedLayer()
+        (pre_1): FullyConnectedLayer()
+        (affine_0): FullyConnectedLayer()
+      )
+      (conv1): SynthesisLayer(
+        (pre_0): FullyConnectedLayer()
+        (pre_1): FullyConnectedLayer()
+        (affine_0): FullyConnectedLayer()
+      )
+      (torgb): ToRGBLayer(
+        (pre_0): FullyConnectedLayer()
+        (pre_1): FullyConnectedLayer()
+        (affine_0): FullyConnectedLayer()
+      )
+    )
+    (b16): SynthesisBlock(
+      (conv0): SynthesisLayer(
+        (pre_0): FullyConnectedLayer()
+        (pre_1): FullyConnectedLayer()
+        (affine_0): FullyConnectedLayer()
+      )
+      (conv1): SynthesisLayer(
+        (pre_0): FullyConnectedLayer()
+        (pre_1): FullyConnectedLayer()
+        (affine_0): FullyConnectedLayer()
+      )
+      (torgb): ToRGBLayer(
+        (pre_0): FullyConnectedLayer()
+        (pre_1): FullyConnectedLayer()
+        (affine_0): FullyConnectedLayer()
+      )
+    )
+    (b32): SynthesisBlock(
+      (conv0): SynthesisLayer(
+        (pre_0): FullyConnectedLayer()
+        (pre_1): FullyConnectedLayer()
+        (affine_0): FullyConnectedLayer()
+      )
+      (conv1): SynthesisLayer(
+        (pre_0): FullyConnectedLayer()
+        (pre_1): FullyConnectedLayer()
+        (affine_0): FullyConnectedLayer()
+      )
+      (torgb): ToRGBLayer(
+        (pre_0): FullyConnectedLayer()
+        (pre_1): FullyConnectedLayer()
+        (affine_0): FullyConnectedLayer()
+      )
+    )
+    (b64): SynthesisBlock(
+      (conv0): SynthesisLayer(
+        (pre_0): FullyConnectedLayer()
+        (pre_1): FullyConnectedLayer()
+        (affine_0): FullyConnectedLayer()
+      )
+      (conv1): SynthesisLayer(
+        (pre_0): FullyConnectedLayer()
+        (pre_1): FullyConnectedLayer()
+        (affine_0): FullyConnectedLayer()
+      )
+      (torgb): ToRGBLayer(
+        (pre_0): FullyConnectedLayer()
+        (pre_1): FullyConnectedLayer()
+        (affine_0): FullyConnectedLayer()
+      )
+    )
+    (b128): SynthesisBlock(
+      (conv0): SynthesisLayer(
+        (pre_0): FullyConnectedLayer()
+        (pre_1): FullyConnectedLayer()
+        (affine_0): FullyConnectedLayer()
+      )
+      (conv1): SynthesisLayer(
+        (pre_0): FullyConnectedLayer()
+        (pre_1): FullyConnectedLayer()
+        (affine_0): FullyConnectedLayer()
+      )
+      (torgb): ToRGBLayer(
+        (pre_0): FullyConnectedLayer()
+        (pre_1): FullyConnectedLayer()
+        (affine_0): FullyConnectedLayer()
+      )
+    )
+    (b256): SynthesisBlock(
+      (conv0): SynthesisLayer(
+        (pre_0): FullyConnectedLayer()
+        (pre_1): FullyConnectedLayer()
+        (affine_0): FullyConnectedLayer()
+      )
+      (conv1): SynthesisLayer(
+        (pre_0): FullyConnectedLayer()
+        (pre_1): FullyConnectedLayer()
+        (affine_0): FullyConnectedLayer()
+      )
+      (torgb): ToRGBLayer(
+        (pre_0): FullyConnectedLayer()
+        (pre_1): FullyConnectedLayer()
+        (affine_0): FullyConnectedLayer()
+      )
+    )
+  )
+  (mapping): MappingNetwork(
+    (fc0): FullyConnectedLayer()
+    (fc1): FullyConnectedLayer()
+    (fc2): FullyConnectedLayer()
+    (fc3): FullyConnectedLayer()
+    (fc4): FullyConnectedLayer()
+    (fc5): FullyConnectedLayer()
+    (fc6): FullyConnectedLayer()
+    (fc7): FullyConnectedLayer()
+  )
+)
+D Discriminator(
+  (b256): DiscriminatorBlock(
+    (fromrgb): Conv2dLayer()
+    (conv0): Conv2dLayer()
+    (conv1): Conv2dLayer()
+    (skip): Conv2dLayer()
+  )
+  (b128): DiscriminatorBlock(
+    (conv0): Conv2dLayer()
+    (conv1): Conv2dLayer()
+    (skip): Conv2dLayer()
+  )
+  (b64): DiscriminatorBlock(
+    (conv0): Conv2dLayer()
+    (conv1): Conv2dLayer()
+    (skip): Conv2dLayer()
+  )
+  (b32): DiscriminatorBlock(
+    (conv0): Conv2dLayer()
+    (conv1): Conv2dLayer()
+    (skip): Conv2dLayer()
+  )
+  (b16): DiscriminatorBlock(
+    (conv0): Conv2dLayer()
+    (conv1): Conv2dLayer()
+    (skip): Conv2dLayer()
+  )
+  (b8): DiscriminatorBlock(
+    (conv0): Conv2dLayer()
+    (conv1): Conv2dLayer()
+    (skip): Conv2dLayer()
+  )
+  (b4): DiscriminatorEpilogue(
+    (mbstd): MinibatchStdLayer()
+    (conv): Conv2dLayer()
+    (fc): FullyConnectedLayer()
+    (fts): FullyConnectedLayer()
+    (out): FullyConnectedLayer()
+  )
+)
+G_ema Generator(
+  (synthesis): SynthesisNetwork(
+    (b4): SynthesisBlock(
+      (conv1): SynthesisLayer(
+        (pre_0): FullyConnectedLayer()
+        (pre_1): FullyConnectedLayer()
+        (affine_0): FullyConnectedLayer()
+      )
+      (torgb): ToRGBLayer(
+        (pre_0): FullyConnectedLayer()
+        (pre_1): FullyConnectedLayer()
+        (affine_0): FullyConnectedLayer()
+      )
+    )
+    (b8): SynthesisBlock(
+      (conv0): SynthesisLayer(
+        (pre_0): FullyConnectedLayer()
+        (pre_1): FullyConnectedLayer()
+        (affine_0): FullyConnectedLayer()
+      )
+      (conv1): SynthesisLayer(
+        (pre_0): FullyConnectedLayer()
+        (pre_1): FullyConnectedLayer()
+        (affine_0): FullyConnectedLayer()
+      )
+      (torgb): ToRGBLayer(
+        (pre_0): FullyConnectedLayer()
+        (pre_1): FullyConnectedLayer()
+        (affine_0): FullyConnectedLayer()
+      )
+    )
+    (b16): SynthesisBlock(
+      (conv0): SynthesisLayer(
+        (pre_0): FullyConnectedLayer()
+        (pre_1): FullyConnectedLayer()
+        (affine_0): FullyConnectedLayer()
+      )
+      (conv1): SynthesisLayer(
+        (pre_0): FullyConnectedLayer()
+        (pre_1): FullyConnectedLayer()
+        (affine_0): FullyConnectedLayer()
+      )
+      (torgb): ToRGBLayer(
+        (pre_0): FullyConnectedLayer()
+        (pre_1): FullyConnectedLayer()
+        (affine_0): FullyConnectedLayer()
+      )
+    )
+    (b32): SynthesisBlock(
+      (conv0): SynthesisLayer(
+        (pre_0): FullyConnectedLayer()
+        (pre_1): FullyConnectedLayer()
+        (affine_0): FullyConnectedLayer()
+      )
+      (conv1): SynthesisLayer(
+        (pre_0): FullyConnectedLayer()
+        (pre_1): FullyConnectedLayer()
+        (affine_0): FullyConnectedLayer()
+      )
+      (torgb): ToRGBLayer(
+        (pre_0): FullyConnectedLayer()
+        (pre_1): FullyConnectedLayer()
+        (affine_0): FullyConnectedLayer()
+      )
+    )
+    (b64): SynthesisBlock(
+      (conv0): SynthesisLayer(
+        (pre_0): FullyConnectedLayer()
+        (pre_1): FullyConnectedLayer()
+        (affine_0): FullyConnectedLayer()
+      )
+      (conv1): SynthesisLayer(
+        (pre_0): FullyConnectedLayer()
+        (pre_1): FullyConnectedLayer()
+        (affine_0): FullyConnectedLayer()
+      )
+      (torgb): ToRGBLayer(
+        (pre_0): FullyConnectedLayer()
+        (pre_1): FullyConnectedLayer()
+        (affine_0): FullyConnectedLayer()
+      )
+    )
+    (b128): SynthesisBlock(
+      (conv0): SynthesisLayer(
+        (pre_0): FullyConnectedLayer()
+        (pre_1): FullyConnectedLayer()
+        (affine_0): FullyConnectedLayer()
+      )
+      (conv1): SynthesisLayer(
+        (pre_0): FullyConnectedLayer()
+        (pre_1): FullyConnectedLayer()
+        (affine_0): FullyConnectedLayer()
+      )
+      (torgb): ToRGBLayer(
+        (pre_0): FullyConnectedLayer()
+        (pre_1): FullyConnectedLayer()
+        (affine_0): FullyConnectedLayer()
+      )
+    )
+    (b256): SynthesisBlock(
+      (conv0): SynthesisLayer(
+        (pre_0): FullyConnectedLayer()
+        (pre_1): FullyConnectedLayer()
+        (affine_0): FullyConnectedLayer()
+      )
+      (conv1): SynthesisLayer(
+        (pre_0): FullyConnectedLayer()
+        (pre_1): FullyConnectedLayer()
+        (affine_0): FullyConnectedLayer()
+      )
+      (torgb): ToRGBLayer(
+        (pre_0): FullyConnectedLayer()
+        (pre_1): FullyConnectedLayer()
+        (affine_0): FullyConnectedLayer()
+      )
+    )
+  )
+  (mapping): MappingNetwork(
+    (fc0): FullyConnectedLayer()
+    (fc1): FullyConnectedLayer()
+    (fc2): FullyConnectedLayer()
+    (fc3): FullyConnectedLayer()
+    (fc4): FullyConnectedLayer()
+    (fc5): FullyConnectedLayer()
+    (fc6): FullyConnectedLayer()
+    (fc7): FullyConnectedLayer()
+  )
+)
+Setting up PyTorch plugin "bias_act_plugin"... Done.
+Setting up PyTorch plugin "upfirdn2d_plugin"... Done.
+
+Generator               Parameters  Buffers  Output shape        Datatype
+---                     ---         ---      ---                 ---     
+mapping.fc0             262656      -        [8, 512]            float32 
+mapping.fc1             262656      -        [8, 512]            float32 
+mapping.fc2             262656      -        [8, 512]            float32 
+mapping.fc3             262656      -        [8, 512]            float32 
+mapping.fc4             262656      -        [8, 512]            float32 
+mapping.fc5             262656      -        [8, 512]            float32 
+mapping.fc6             262656      -        [8, 512]            float32 
+mapping.fc7             262656      -        [8, 512]            float32 
+mapping                 -           512      [8, 14, 512]        float32 
+synthesis.b4.conv1:0    3409921     32       [8, 512, 4, 4]      float32 
+synthesis.b4.conv1:1    -           -        [8, 512, 4, 4]      float32 
+synthesis.b4.torgb:0    1051651     -        [8, 3, 4, 4]        float32 
+synthesis.b4.torgb:1    -           -        [8, 3, 4, 4]        float32 
+synthesis.b4:0          8192        16       [8, 512, 4, 4]      float32 
+synthesis.b4:1          -           -        [8, 512, 4, 4]      float32 
+synthesis.b8.conv0:0    3409921     80       [8, 512, 8, 8]      float32 
+synthesis.b8.conv0:1    -           -        [8, 512, 8, 8]      float32 
+synthesis.b8.conv1:0    3409921     80       [8, 512, 8, 8]      float32 
+synthesis.b8.conv1:1    -           -        [8, 512, 8, 8]      float32 
+synthesis.b8.torgb:0    1051651     -        [8, 3, 8, 8]        float32 
+synthesis.b8.torgb:1    -           -        [8, 3, 8, 8]        float32 
+synthesis.b8:0          -           16       [8, 512, 8, 8]      float32 
+synthesis.b8:1          -           -        [8, 512, 8, 8]      float32 
+synthesis.b16.conv0:0   3409921     272      [8, 512, 16, 16]    float32 
+synthesis.b16.conv0:1   -           -        [8, 512, 16, 16]    float32 
+synthesis.b16.conv1:0   3409921     272      [8, 512, 16, 16]    float32 
+synthesis.b16.conv1:1   -           -        [8, 512, 16, 16]    float32 
+synthesis.b16.torgb:0   1051651     -        [8, 3, 16, 16]      float32 
+synthesis.b16.torgb:1   -           -        [8, 3, 16, 16]      float32 
+synthesis.b16:0         -           16       [8, 512, 16, 16]    float32 
+synthesis.b16:1         -           -        [8, 512, 16, 16]    float32 
+synthesis.b32.conv0:0   3409921     1040     [8, 512, 32, 32]    float16 
+synthesis.b32.conv0:1   -           -        [8, 512, 32, 32]    float32 
+synthesis.b32.conv1:0   3409921     1040     [8, 512, 32, 32]    float16 
+synthesis.b32.conv1:1   -           -        [8, 512, 32, 32]    float32 
+synthesis.b32.torgb:0   1051651     -        [8, 3, 32, 32]      float16 
+synthesis.b32.torgb:1   -           -        [8, 3, 32, 32]      float32 
+synthesis.b32:0         -           16       [8, 512, 32, 32]    float16 
+synthesis.b32:1         -           -        [8, 512, 32, 32]    float32 
+synthesis.b64.conv0:0   3409921     4112     [8, 512, 64, 64]    float16 
+synthesis.b64.conv0:1   -           -        [8, 512, 64, 64]    float32 
+synthesis.b64.conv1:0   3409921     4112     [8, 512, 64, 64]    float16 
+synthesis.b64.conv1:1   -           -        [8, 512, 64, 64]    float32 
+synthesis.b64.torgb:0   1051651     -        [8, 3, 64, 64]      float16 
+synthesis.b64.torgb:1   -           -        [8, 3, 64, 64]      float32 
+synthesis.b64:0         -           16       [8, 512, 64, 64]    float16 
+synthesis.b64:1         -           -        [8, 512, 64, 64]    float32 
+synthesis.b128.conv0:0  2230017     16400    [8, 256, 128, 128]  float16 
+synthesis.b128.conv0:1  -           -        [8, 256, 128, 128]  float32 
+synthesis.b128.conv1:0  1377793     16400    [8, 256, 128, 128]  float16 
+synthesis.b128.conv1:1  -           -        [8, 256, 128, 128]  float32 
+synthesis.b128.torgb:0  788483      -        [8, 3, 128, 128]    float16 
+synthesis.b128.torgb:1  -           -        [8, 3, 128, 128]    float32 
+synthesis.b128:0        -           16       [8, 256, 128, 128]  float16 
+synthesis.b128:1        -           -        [8, 256, 128, 128]  float32 
+synthesis.b256.conv0:0  1082753     65552    [8, 128, 256, 256]  float16 
+synthesis.b256.conv0:1  -           -        [8, 128, 256, 256]  float32 
+synthesis.b256.conv1:0  804097      65552    [8, 128, 256, 256]  float16 
+synthesis.b256.conv1:1  -           -        [8, 128, 256, 256]  float32 
+synthesis.b256.torgb:0  656899      -        [8, 3, 256, 256]    float16 
+synthesis.b256.torgb:1  -           -        [8, 3, 256, 256]    float32 
+synthesis.b256:0        -           16       [8, 128, 256, 256]  float16 
+synthesis.b256:1        -           -        [8, 128, 256, 256]  float32 
+---                     ---         ---      ---                 ---     
+Total                   44997026    175568   -                   -       
+
+
+Discriminator  Parameters  Buffers  Output shape        Datatype
+---            ---         ---      ---                 ---     
+b256.fromrgb   512         16       [8, 128, 256, 256]  float16 
+b256.skip      32768       16       [8, 256, 128, 128]  float16 
+b256.conv0     147584      16       [8, 128, 256, 256]  float16 
+b256.conv1     295168      16       [8, 256, 128, 128]  float16 
+b256           -           16       [8, 256, 128, 128]  float16 
+b128.skip      131072      16       [8, 512, 64, 64]    float16 
+b128.conv0     590080      16       [8, 256, 128, 128]  float16 
+b128.conv1     1180160     16       [8, 512, 64, 64]    float16 
+b128           -           16       [8, 512, 64, 64]    float16 
+b64.skip       262144      16       [8, 512, 32, 32]    float16 
+b64.conv0      2359808     16       [8, 512, 64, 64]    float16 
+b64.conv1      2359808     16       [8, 512, 32, 32]    float16 
+b64            -           16       [8, 512, 32, 32]    float16 
+b32.skip       262144      16       [8, 512, 16, 16]    float16 
+b32.conv0      2359808     16       [8, 512, 32, 32]    float16 
+b32.conv1      2359808     16       [8, 512, 16, 16]    float16 
+b32            -           16       [8, 512, 16, 16]    float16 
+b16.skip       262144      16       [8, 512, 8, 8]      float32 
+b16.conv0      2359808     16       [8, 512, 16, 16]    float32 
+b16.conv1      2359808     16       [8, 512, 8, 8]      float32 
+b16            -           16       [8, 512, 8, 8]      float32 
+b8.skip        262144      16       [8, 512, 4, 4]      float32 
+b8.conv0       2359808     16       [8, 512, 8, 8]      float32 
+b8.conv1       2359808     16       [8, 512, 4, 4]      float32 
+b8             -           16       [8, 512, 4, 4]      float32 
+b4.mbstd       -           -        [8, 513, 4, 4]      float32 
+b4.conv        2364416     16       [8, 512, 4, 4]      float32 
+b4.fc          4194816     -        [8, 512]            float32 
+b4.out         513         -        [8, 1]              float32 
+b4.fts         262656      -        [8, 512]            float32 
+b4:0           -           -        [8, 1]              float32 
+b4:1           -           -        [8, 1]              float32 
+---            ---         ---      ---                 ---     
+Total          29126785    416      -                   -       
+
+Setting up augmentation...
+Distributing across 2 GPUs...
+Setting up training phases...
+Exporting sample images...
+[torch.Size([8, 3, 256, 256]), torch.Size([8, 3, 256, 256]), torch.Size([8, 3, 256, 256]), torch.Size([8, 3, 256, 256]), torch.Size([8, 3, 256, 256]), torch.Size([8, 3, 256, 256]), torch.Size([8, 3, 256, 256]), torch.Size([8, 3, 256, 256])]
+[torch.Size([8, 3, 256, 256]), torch.Size([8, 3, 256, 256]), torch.Size([8, 3, 256, 256]), torch.Size([8, 3, 256, 256]), torch.Size([8, 3, 256, 256]), torch.Size([8, 3, 256, 256]), torch.Size([8, 3, 256, 256]), torch.Size([8, 3, 256, 256])]
+[torch.Size([8, 3, 256, 256]), torch.Size([8, 3, 256, 256]), torch.Size([8, 3, 256, 256]), torch.Size([8, 3, 256, 256]), torch.Size([8, 3, 256, 256]), torch.Size([8, 3, 256, 256]), torch.Size([8, 3, 256, 256]), torch.Size([8, 3, 256, 256])]
+[torch.Size([8, 3, 256, 256]), torch.Size([8, 3, 256, 256]), torch.Size([8, 3, 256, 256]), torch.Size([8, 3, 256, 256]), torch.Size([8, 3, 256, 256]), torch.Size([8, 3, 256, 256]), torch.Size([8, 3, 256, 256]), torch.Size([8, 3, 256, 256])]
+[torch.Size([8, 3, 256, 256]), torch.Size([8, 3, 256, 256]), torch.Size([8, 3, 256, 256]), torch.Size([8, 3, 256, 256]), torch.Size([8, 3, 256, 256]), torch.Size([8, 3, 256, 256]), torch.Size([8, 3, 256, 256]), torch.Size([8, 3, 256, 256])]
+[torch.Size([8, 3, 256, 256]), torch.Size([8, 3, 256, 256]), torch.Size([8, 3, 256, 256]), torch.Size([8, 3, 256, 256]), torch.Size([8, 3, 256, 256]), torch.Size([8, 3, 256, 256]), torch.Size([8, 3, 256, 256]), torch.Size([8, 3, 256, 256])]
+Initializing logs...
+Training for 25000 kimg...
+
+tick 0     kimg 0.0      time 5m 31s       sec/tick 87.9    sec/kimg 5491.20 maintenance 242.7  cpumem 3.92   gpumem 6.73   augment 0.000
+Evaluating metrics...
+{"results": {"fid50k_full": 187.35295148514575}, "metric": "fid50k_full", "total_time": 1242.5829591751099, "total_time_str": "20m 43s", "num_gpus": 2, "snapshot_pkl": "network-snapshot-000000.pkl", "timestamp": 1649796344.3801093}
+tick 1     kimg 4.0      time 42m 43s      sec/tick 915.2   sec/kimg 228.81  maintenance 1317.5 cpumem 4.12   gpumem 5.67   augment 0.000
+tick 2     kimg 8.0      time 58m 01s      sec/tick 917.3   sec/kimg 229.31  maintenance 0.7    cpumem 4.12   gpumem 5.55   augment 0.000

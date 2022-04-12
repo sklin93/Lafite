@@ -175,8 +175,11 @@ def setup_training_loop_kwargs(
     print('using data: ', data, 'testing data: ', test_data)
     if test_data is None:
         test_data = data
-    args.training_set_kwargs = dnnlib.EasyDict(class_name='training.dataset.ImageFolderDataset', path=data, use_labels=True, max_size=None, xflip=False, use_clip=True, ratio=args.ratio)
-    args.testing_set_kwargs = dnnlib.EasyDict(class_name='training.dataset.ImageFolderDataset', path=test_data, use_labels=True, max_size=None, xflip=False, use_clip=True, ratio=1.0)
+    # args.training_set_kwargs = dnnlib.EasyDict(class_name='training.dataset.ImageFolderDataset', path=data, use_labels=True, max_size=None, xflip=False, use_clip=True, ratio=args.ratio)
+    # args.testing_set_kwargs = dnnlib.EasyDict(class_name='training.dataset.ImageFolderDataset', path=test_data, use_labels=True, max_size=None, xflip=False, use_clip=True, ratio=1.0)
+    args.training_set_kwargs = dnnlib.EasyDict(class_name='training.dataset.NsdClipDataset', path=data, use_mapped='img', use_fmri=False, fmri_pad=15744, use_clip=True, threshold=1.5, normalize_clip=True, use_labels=True, max_size=None, xflip=False, ratio=args.ratio)
+    args.testing_set_kwargs = dnnlib.EasyDict(class_name='training.dataset.NsdClipDataset', path=test_data, use_mapped='img', use_fmri=False, fmri_pad=15744, use_clip=True, threshold=1.5, normalize_clip=True, use_labels=True, max_size=None, xflip=False, ratio=1.0)
+
     args.data_loader_kwargs = dnnlib.EasyDict(pin_memory=False, num_workers=1, prefetch_factor=2)
     try:
         training_set = dnnlib.util.construct_class_by_name(**args.training_set_kwargs) # subclass of training.dataset.Dataset
@@ -238,7 +241,8 @@ def setup_training_loop_kwargs(
         desc += f'-gpus{gpus:d}'
         spec.ref_gpus = gpus
         res = args.training_set_kwargs.resolution
-        spec.mb = 16*gpus#max(min(gpus * min(4096 // res, 32), 64), gpus) # keep gpu memory consumption at bay
+        spec.mb = 8 * gpus
+        # spec.mb = 16*gpus#max(min(gpus * min(4096 // res, 32), 64), gpus) # keep gpu memory consumption at bay
         spec.mbstd = min(spec.mb // gpus, 4) # other hyperparams behave more predictably if mbstd group size remains fixed
         spec.fmaps = 1 if res >= 512 else fmap
         spec.lrate = 0.002 if res >= 1024 else 0.0025

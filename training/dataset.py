@@ -24,7 +24,7 @@ class Dataset(torch.utils.data.Dataset):
         max_size    = None,     # Artificially limit the size of the dataset. None = no limit. Applied before xflip.
         use_labels  = False,    # Enable conditioning labels? False = label dimension is zero.
         use_clip    = False,
-        threshold = 1.5,        # threshold of clip features, set to <= 0 to disable
+        threshold = 0,          # threshold of clip features, set to <= 0 to disable
         normalize_clip = False, # whether to normalize the vector to a unit sphere
         use_fmri    = False,    # Whether to load fmri: for e2e training, load fmri and finetune the mapper together
         fmri_pad    = 0,        # Padding for fmri vector
@@ -356,18 +356,19 @@ class ImageFolderDataset(Dataset):
 
 class NsdClipDataset(Dataset):
     def __init__(self,
-        nsd_clip,               # json file contains mappings to fmriId, nsdId, cocoId
+        path,                   # json file contains mappings to fmriId, nsdId, cocoId
         data_dir = None,        # root data folder
         fmri_dir = None,
         img_file = None,
-        clip_img_file = None,
-        clip_cap_file = None,
-        use_mapped  = False,    # Whether to use precomputed fmri-mapped vector
+        clip_img_file = None,   # pre-computed clip image vectors
+        clip_cap_file = None,   # pre-computed clip caption vectors, OR pre-computed conditions
+        use_mapped  = False,    # Whether to use precomputed fmri-mapped vector, choose from None (will use gt txt clip vec), 'img', 'cap'
         resolution = None,      # Ensure specific resolution, None = highest available.
         **super_kwargs,         # Additional arguments for the Dataset base class.
         ):
 
-        with open(nsd_clip, 'r') as f:
+        self._path = path
+        with open(path, 'r') as f:
             self.nsd_clip = json.load(f)
 
         data_dir = self.default(data_dir, '/home/sikun/NSD/data/')
@@ -380,19 +381,24 @@ class NsdClipDataset(Dataset):
         self.img_file = self.default(img_file, os.path.join(data_dir,
             'nsddata_stimuli/stimuli/nsd/nsd_stimuli.hdf5'))
 
-        if use_mapped:
-            self.clip_img_file = self.default(clip_img_file,
+        self.clip_img_file = self.default(clip_img_file,
+            os.path.join(data_dir, 'clip_features', 'nsd_images.json'))
+
+        if use_mapped is None:
+            self.clip_cap_file = self.default(clip_cap_file,
+                os.path.join(data_dir, 'clip_features', 'nsd_captions.json'))
+        elif use_mapped == 'img':            
+            self.clip_cap_file = self.default(clip_cap_file,
                 os.path.join(data_dir, 'clip_features', 'fmri_nsd_images.json'))
+        elif use_mapped == 'cap':
             self.clip_cap_file = self.default(clip_cap_file,
                 os.path.join(data_dir, 'clip_features', 'fmri_nsd_captions.json'))
         else:
-            self.clip_img_file = self.default(clip_img_file,
-                os.path.join(data_dir, 'clip_features', 'nsd_images.json'))
-            self.clip_cap_file = self.default(clip_cap_file,
-                os.path.join(data_dir, 'clip_features', 'nsd_captions.json'))
+            raise ValueError("Use_mapped must be None, 'img', 'cap'")
+
         self._use_mapped = use_mapped
 
-        name = os.path.splitext(os.path.basename(nsd_clip))[0]
+        name = os.path.splitext(os.path.basename(path))[0]
         raw_shape = [len(self.nsd_clip['fmriId'])] + list(self._load_raw_image(0).shape)
         if resolution is not None and (raw_shape[2] != resolution or raw_shape[3] != resolution):
             raise IOError('Image files do not match the specified resolution')
@@ -431,16 +437,14 @@ class NsdClipDataset(Dataset):
         image = image.transpose(2, 0, 1) # HWC => CHW
         return image
 
-    def _get_clip_id(self, raw_idx):
+    def _get_clip_id(self, raw_idx, use_nsdId=True):
         # return the key of clip features in the precomputed json files
-        return str(self.nsd_clip['fmriId'][raw_idx] if self._use_mapped else (
-            self.nsd_clip['nsdId'][raw_idx]))
+        return str(self.nsd_clip['nsdId'][raw_idx] if use_nsdId else (
+            self.nsd_clip['fmriId'][raw_idx]))
 
     def _load_clip_img_features(self, raw_idx):
         with open(self.clip_img_file, 'r') as f:
             clip_features = json.load(f)[self._get_clip_id(raw_idx)]
-        if self._use_mapped:
-            clip_features = clip_features[1] # corresponding json saves (nsdId, clipfeatures)
 
         clip_features = np.array(clip_features)
         clip_features = clip_features.astype(np.float32)
@@ -449,8 +453,9 @@ class NsdClipDataset(Dataset):
 
     def _load_clip_txt_features(self, raw_idx):
         with open(self.clip_cap_file, 'r') as f:
-            clip_features = json.load(f)[self._get_clip_id(raw_idx)]
-        if self._use_mapped:
+            clip_features = json.load(f)[self._get_clip_id(raw_idx, use_nsdId=(
+                True if (self._use_mapped is None) else False))]
+        if self._use_mapped is not None:
             clip_features = [clip_features[1]] # corresponding json saves (nsdId, clipfeatures)
 
         return clip_features

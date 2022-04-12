@@ -152,8 +152,10 @@ def calc_metrics(ctx, network_pkl, metrics, data, test_data, mirror, gpus, verbo
 
     # Initialize dataset options.
     if data is not None:
-        args.dataset_kwargs = dnnlib.EasyDict(class_name='training.dataset.ImageFolderDataset', path=data, use_clip=True)
-        args.testset_kwargs = dnnlib.EasyDict(class_name='training.dataset.ImageFolderDataset', path=test_data, use_clip=True)
+        # args.dataset_kwargs = dnnlib.EasyDict(class_name='training.dataset.ImageFolderDataset', path=data, use_clip=True)
+        # args.testset_kwargs = dnnlib.EasyDict(class_name='training.dataset.ImageFolderDataset', path=test_data, use_clip=True)
+        args.dataset_kwargs = dnnlib.EasyDict(class_name='training.dataset.NsdClipDataset', path=data, use_mapped='img', use_fmri=False, fmri_pad=15744, use_clip=True, threshold=1.5, normalize_clip=True)
+        args.testset_kwargs = dnnlib.EasyDict(class_name='training.dataset.NsdClipDataset', path=test_data, use_mapped='img', use_fmri=False, fmri_pad=15744, use_clip=True, threshold=1.5, normalize_clip=True)
     elif network_dict['training_set_kwargs'] is not None:
         args.dataset_kwargs = dnnlib.EasyDict(network_dict['training_set_kwargs'])
         try:
