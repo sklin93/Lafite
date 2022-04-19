@@ -81,7 +81,6 @@ class Dataset(torch.utils.data.Dataset):
             self._raw_clip_txt_features = self._load_clip_txt_features(raw_idx) if self._use_clip else None
         return self._raw_clip_txt_features
 
-
     def close(self): # to be overridden by subclass
         pass
 
@@ -131,6 +130,7 @@ class Dataset(torch.utils.data.Dataset):
             image = image[:, :, ::-1]
         if self._use_clip:
             if idx % self._raw_shape[0] > self._ratio*self._raw_shape[0]:
+                ipdb.set_trace()
                 noise = np.random.normal(0., 1., (512))
                 img_fts = self.get_img_features(idx)
                 revised_img_fts = 0.25*img_fts/np.linalg.norm(img_fts) + 0.75*noise/np.linalg.norm(noise)
@@ -144,7 +144,6 @@ class Dataset(torch.utils.data.Dataset):
                     return image.copy(), self.get_label(idx), self.get_img_features(idx), self.get_txt_features(idx), self.get_fmri(idx)
                 else:
                     return image.copy(), self.get_label(idx), self.get_img_features(idx), self.get_txt_features(idx)
-            # return image.copy(), self.get_label(idx), self.get_img_features(idx), self.get_txt_features(idx)
         else:
             return image.copy(), self.get_label(idx)
 
@@ -362,7 +361,7 @@ class NsdClipDataset(Dataset):
         img_file = None,
         clip_img_file = None,   # pre-computed clip image vectors
         clip_cap_file = None,   # pre-computed clip caption vectors, OR pre-computed conditions
-        use_mapped  = False,    # Whether to use precomputed fmri-mapped vector, choose from None (will use gt txt clip vec), 'img', 'cap'
+        use_mapped  = False,    # Whether to use precomputed fmri-mapped vector, choose from None (will use gt txt clip vec), 'img', 'cap', 'add', 'cat', 'mix' (the latter three combines clip_img and clip_cap)
         resolution = None,      # Ensure specific resolution, None = highest available.
         **super_kwargs,         # Additional arguments for the Dataset base class.
         ):
@@ -382,27 +381,24 @@ class NsdClipDataset(Dataset):
             'nsddata_stimuli/stimuli/nsd/nsd_stimuli.hdf5'))
 
         self.clip_img_file = self.default(clip_img_file,
-            os.path.join(data_dir, 'clip_features', 'nsd_images.json'))
+            os.path.join(data_dir, 'clip_features', 'nsd_images.json'))    
+        self.clip_cap_file = self.default(clip_cap_file,
+            os.path.join(data_dir, 'clip_features', 'nsd_captions.json'))
 
-        if use_mapped is None:
-            self.clip_cap_file = self.default(clip_cap_file,
-                os.path.join(data_dir, 'clip_features', 'nsd_captions.json'))
-        elif use_mapped == 'img':            
-            self.clip_cap_file = self.default(clip_cap_file,
-                os.path.join(data_dir, 'clip_features', 'fmri_nsd_images.json'))
-        elif use_mapped == 'cap':
-            self.clip_cap_file = self.default(clip_cap_file,
-                os.path.join(data_dir, 'clip_features', 'fmri_nsd_captions.json'))
-        else:
-            raise ValueError("Use_mapped must be None, 'img', 'cap'")
-
+        self.mapped_clip_img_file = self.default(clip_cap_file,
+            os.path.join(data_dir, 'clip_features', 'fmri_nsd_images.json'))
+        self.mapped_clip_cap_file = self.default(clip_cap_file,
+            os.path.join(data_dir, 'clip_features', 'fmri_nsd_captions.json'))
+        allowed_ks = ['img', 'cap', 'add', 'cat', 'mix']
+        assert (use_mapped is None) or (use_mapped in allowed_ks), (
+            f'Use_mapped must be None, or one of {allowed_ks}')
         self._use_mapped = use_mapped
 
         name = os.path.splitext(os.path.basename(path))[0]
         raw_shape = [len(self.nsd_clip['fmriId'])] + list(self._load_raw_image(0).shape)
         if resolution is not None and (raw_shape[2] != resolution or raw_shape[3] != resolution):
             raise IOError('Image files do not match the specified resolution')
-        super().__init__(name=name, raw_shape=raw_shape, **super_kwargs)        
+        super().__init__(name=name, raw_shape=raw_shape, **super_kwargs)
 
     @staticmethod
     def exists(val):
@@ -452,11 +448,35 @@ class NsdClipDataset(Dataset):
         return clip_features
 
     def _load_clip_txt_features(self, raw_idx):
-        with open(self.clip_cap_file, 'r') as f:
-            clip_features = json.load(f)[self._get_clip_id(raw_idx, use_nsdId=(
-                True if (self._use_mapped is None) else False))]
-        if self._use_mapped is not None:
+        if self._use_mapped is None:
+            with open(self.clip_cap_file, 'r') as f:
+                clip_features = json.load(f)[self._get_clip_id(raw_idx)]
+        elif self._use_mapped == 'img':
+            with open(self.mapped_clip_img_file, 'r') as f:
+                clip_features = json.load(f)[self._get_clip_id(raw_idx, use_nsdId=False)]
             clip_features = [clip_features[1]] # corresponding json saves (nsdId, clipfeatures)
+        elif self._use_mapped == 'cap':
+            with open(self.mapped_clip_cap_file, 'r') as f:
+                clip_features = json.load(f)[self._get_clip_id(raw_idx, use_nsdId=False)]
+            clip_features = [clip_features[1]] # corresponding json saves (nsdId, clipfeatures)
+        else:
+            with open(self.mapped_clip_img_file, 'r') as f:
+                mapped_clip_img = json.load(f)[self._get_clip_id(raw_idx, use_nsdId=False)][1]
+            with open(self.mapped_clip_cap_file, 'r') as f:
+                mapped_clip_cap = json.load(f)[self._get_clip_id(raw_idx, use_nsdId=False)][1]
+            if self._use_mapped == 'add':
+                assert len(mapped_clip_img) == len(mapped_clip_cap)
+                clip_features = [0.5 * mapped_clip_img[i] + 0.5 * mapped_clip_cap[i]
+                                 for i in range(len(mapped_clip_img))]
+            elif self._use_mapped == 'cat':
+                clip_features = mapped_clip_img + mapped_clip_cap
+            elif self._use_mapped == 'mix':
+                clip_features = mapped_clip_cap.copy()
+                # randomly select half of the positions to use img vec
+                img_pos = np.random.choice(range(len(clip_features)), size=len(clip_features)//2, replace=False) # TODO: mix here or have a fixed idx in init?
+                for _img_pos in img_pos:
+                    clip_features[_img_pos] = mapped_clip_img[_img_pos]
+            clip_features = [clip_features]
 
         return clip_features
 

@@ -29,7 +29,7 @@ def modulated_conv2d(
     demodulate      = True,     # Apply weight demodulation?
     flip_weight     = True,     # False = convolution, True = correlation (matches torch.nn.functional.conv2d).
     fused_modconv   = True,     # Perform modulation, convolution, and demodulation as a single fused operation?
-):
+    ):
     batch_size = x.shape[0]
     out_channels, in_channels, kh, kw = weight.shape
     misc.assert_shape(weight, [out_channels, in_channels, kh, kw]) # [OIkk]
@@ -289,7 +289,7 @@ class ManiNetwork(torch.nn.Module):
             for idx in range(4):
                 layer = FullyConnectedLayer(ch[idx], ch[1 + idx], activation=ad[idx], lr_multiplier=lr_multiplier)
                 setattr(self, f'w_fts_{idx}', layer)  
-# #             setattr(self, f's_w_fts_{idx}', layer)
+            # setattr(self, f's_w_fts_{idx}', layer)
         elif self.structure == 2:
             ch = [layer_features] +[layer_features]*3 +[w_dim]
             for idx in range(4):
@@ -366,7 +366,7 @@ class ManiNetwork(torch.nn.Module):
 #----------------------------------------------------------------------------
 
 @persistence.persistent_class
-class SynthesisLayer(torch.nn.Module):
+class SynthesisLayer(torch.nn.Module):  # <-- added (change)
     def __init__(self,
         in_channels,                    # Number of input channels.
         out_channels,                   # Number of output channels.
@@ -379,7 +379,7 @@ class SynthesisLayer(torch.nn.Module):
         resample_filter = [1,3,3,1],    # Low-pass filter to apply when resampling activations.
         conv_clamp      = None,         # Clamp the output of convolution layers to +-X, None = disable clamping.
         channels_last   = False,  # Use channels_last format for the weights?
-        structure = 0, 
+        structure = 0,  # added (structure == 3 is the original StyleGAN2)
         f_dim = 512
     ):
         super().__init__()
@@ -780,8 +780,8 @@ class Generator(torch.nn.Module):
         img_channels,               # Number of output color channels.
         mapping_kwargs      = {},   # Arguments for MappingNetwork.
         synthesis_kwargs    = {},   # Arguments for SynthesisNetwork.
-        m_layer_features = 512, 
-        m_num_layers = 0,                 
+        m_layer_features = 512, # mimic CLIP
+        m_num_layers = 0,  # ??? no use at all               
     ):
         super().__init__()
         self.z_dim = z_dim
@@ -879,7 +879,7 @@ class DiscriminatorBlock(torch.nn.Module):
         
         
         
-    def forward(self, x, img, force_fp32=False, fts=None):
+    def forward(self, x, img, force_fp32=False, fts=None): # no need to add fts at all...
         dtype = torch.float16 if self.use_fp16 and not force_fp32 else torch.float32
         memory_format = torch.channels_last if self.channels_last and not force_fp32 else torch.contiguous_format
 

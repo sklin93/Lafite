@@ -47,7 +47,8 @@ def subprocess_fn(rank, args, temp_dir):
     if rank == 0 and args.verbose:
         z = torch.empty([1, G.z_dim], device=device)
         c = torch.empty([1, G.c_dim], device=device)
-        fts = torch.empty([1, 512], device=device)
+        # fts = torch.empty([1, 512], device=device)
+        fts = torch.empty([1, args.f_dim], device=device)
         img = misc.print_module_summary(G, [z, c])
         misc.print_module_summary(D, [img, c, fts])
 #         z = torch.empty([1, G.z_dim], device=device)
@@ -95,8 +96,9 @@ class CommaSeparatedList(click.ParamType):
 @click.option('--mirror', help='Whether the dataset was augmented with x-flips during training [default: look up]', type=bool, metavar='BOOL')
 @click.option('--gpus', help='Number of GPUs to use', type=int, default=1, metavar='INT', show_default=True)
 @click.option('--verbose', help='Print optional information', type=bool, default=True, metavar='BOOL', show_default=True)
+@click.option('--cond_vec', help='how the condition vector is provided and/or mixed', type=click.Choice(['img', 'cap', 'add', 'cat', 'mix']))
 
-def calc_metrics(ctx, network_pkl, metrics, data, test_data, mirror, gpus, verbose):
+def calc_metrics(ctx, network_pkl, metrics, data, test_data, mirror, gpus, cond_vec, verbose):
     """Calculate quality metrics for previous training run or pretrained network pickle.
 
     Examples:
@@ -154,8 +156,8 @@ def calc_metrics(ctx, network_pkl, metrics, data, test_data, mirror, gpus, verbo
     if data is not None:
         # args.dataset_kwargs = dnnlib.EasyDict(class_name='training.dataset.ImageFolderDataset', path=data, use_clip=True)
         # args.testset_kwargs = dnnlib.EasyDict(class_name='training.dataset.ImageFolderDataset', path=test_data, use_clip=True)
-        args.dataset_kwargs = dnnlib.EasyDict(class_name='training.dataset.NsdClipDataset', path=data, use_mapped='img', use_fmri=False, fmri_pad=15744, use_clip=True, threshold=1.5, normalize_clip=True)
-        args.testset_kwargs = dnnlib.EasyDict(class_name='training.dataset.NsdClipDataset', path=test_data, use_mapped='img', use_fmri=False, fmri_pad=15744, use_clip=True, threshold=1.5, normalize_clip=True)
+        args.dataset_kwargs = dnnlib.EasyDict(class_name='training.dataset.NsdClipDataset', path=data, use_mapped=cond_vec, use_fmri=False, fmri_pad=15744, use_clip=True, threshold=1.5, normalize_clip=True)
+        args.testset_kwargs = dnnlib.EasyDict(class_name='training.dataset.NsdClipDataset', path=test_data, use_mapped=cond_vec, use_fmri=False, fmri_pad=15744, use_clip=True, threshold=1.5, normalize_clip=True)
     elif network_dict['training_set_kwargs'] is not None:
         args.dataset_kwargs = dnnlib.EasyDict(network_dict['training_set_kwargs'])
         try:
