@@ -135,7 +135,7 @@ def _conv2d_gradfix(transpose, weight_shape, stride, padding, output_padding, di
         @staticmethod
         def forward(ctx, grad_output, input, bias):
             bias_shape = bias.shape if (bias is not None) else None
-            empty_weight = torch.empty(weight_shape, dtype=input.dtype, layout=input.layout, device=input.device)
+            empty_weight = torch.tensor(0.0, dtype=input.dtype, device=input.device).expand(weight_shape)
             grad_weight = torch.ops.aten.convolution_backward(grad_output, input, empty_weight, bias_sizes=bias_shape, stride=stride, padding=padding, dilation=dilation, transposed=transpose, output_padding=output_padding, groups=groups, output_mask=[0,1,0])[1]
             assert grad_weight.shape == weight_shape
             ctx.save_for_backward(grad_output, input)
