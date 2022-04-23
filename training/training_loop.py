@@ -14,6 +14,7 @@ from torch_utils import misc
 from torch_utils import training_stats
 from torch_utils.ops import conv2d_gradfix
 from torch_utils.ops import grid_sample_gradfix
+# import matplotlib.pyplot as plt
 import sys
 sys.path.append('/home/sikun/bold5k/CLIP')
 import clip
@@ -131,7 +132,8 @@ def training_loop(
     iic                     = 0.,
     metric_only_test        = False,
     finetune                = False,
-    ratio = 1.
+    ratio                   = 1.,
+    use_fmri                = False,
 
 ):
     # Initialize.
@@ -322,7 +324,16 @@ def training_loop(
 
         # Fetch training data.
         with torch.autograd.profiler.record_function('data_fetch'):
-            phase_real_img, phase_real_c, phase_img_features, phase_txt_features = next(training_set_iterator)
+            if use_fmri:
+                phase_real_img, phase_real_c, phase_img_features, phase_txt_features, phase_fmri = next(training_set_iterator)
+                ipdb.set_trace() #TODO (e2e): dealing / scaling fmri? Put onto different GPUs?
+            else:
+                phase_real_img, phase_real_c, phase_img_features, phase_txt_features = next(training_set_iterator)
+                # print(phase_real_img.shape, phase_img_features.shape, phase_txt_features.shape) # torch.Size([b, 3, 256, 256]) torch.Size([b, 512]) torch.Size([b, 512])
+                # plt.plot(phase_img_features[0])
+                # plt.show()
+                # plt.plot(phase_txt_features[0])
+                # plt.show()
             phase_img_features /= phase_img_features.norm(dim=-1, keepdim=True)
             phase_txt_features /= phase_txt_features.norm(dim=-1, keepdim=True)
             phase_img_features = phase_img_features.to(device).split(batch_gpu)
@@ -347,10 +358,24 @@ def training_loop(
             phase.module.requires_grad_(True)
 
             # Accumulate gradients over multiple rounds.
-            for round_idx, (real_img, real_c, gen_z, gen_c, real_img_feature, real_txt_feature) in enumerate(zip(phase_real_img, phase_real_c, phase_gen_z, phase_gen_c, phase_img_features, phase_txt_features)):
-                sync = (round_idx == batch_size // (batch_gpu * num_gpus) - 1)
-                gain = phase.interval
-                loss.accumulate_gradients(phase=phase.name, real_img=real_img, real_c=real_c, gen_z=gen_z, gen_c=gen_c, sync=sync, gain=gain, img_fts=real_img_feature, txt_fts=real_txt_feature, mixing_prob=mixing_prob, temp=temp, lam=lam, gather=gather, d_use_fts=d_use_fts, itd=itd, itc=itc, iid=iid, iic=iic)
+            if use_fmri:
+                ipdb.set_trace() # TODO: change accumulate gradients in the loss file, add additional fmri arg
+                for round_idx, (real_img, real_c, gen_z, gen_c, real_img_feature, real_txt_feature, fmri) in enumerate(zip(phase_real_img, phase_real_c, phase_gen_z, phase_gen_c, phase_img_features, phase_txt_features, phase_fmri)):
+                    sync = (round_idx == batch_size // (batch_gpu * num_gpus) - 1)
+                    gain = phase.interval
+                    loss.accumulate_gradients(phase=phase.name, real_img=real_img, real_c=real_c, gen_z=gen_z, gen_c=gen_c, sync=sync, gain=gain, img_fts=real_img_feature, txt_fts=real_txt_feature, mixing_prob=mixing_prob, temp=temp, lam=lam, gather=gather, d_use_fts=d_use_fts, itd=itd, itc=itc, iid=iid, iic=iic, fmri=fmri)
+            else:
+                for round_idx, (real_img, real_c, gen_z, gen_c, real_img_feature, real_txt_feature) in enumerate(zip(phase_real_img, phase_real_c, phase_gen_z, phase_gen_c, phase_img_features, phase_txt_features)):
+                    # print(real_img.shape, real_c.shape, gen_z.shape, gen_c, real_img_feature.shape, real_txt_feature.shape)
+                    # # torch.Size([b, 3, 256, 256]) torch.Size([b, 0]) torch.Size([b, 512]) tensor([], device='cuda:0', size=(b, 0)) torch.Size([b, 512]) torch.Size([b, 512])
+                    # plt.plot(real_img_feature[0].cpu().numpy())
+                    # plt.show()
+                    # plt.plot(real_txt_feature[0].cpu().numpy())
+                    # plt.show()
+
+                    sync = (round_idx == batch_size // (batch_gpu * num_gpus) - 1)
+                    gain = phase.interval
+                    loss.accumulate_gradients(phase=phase.name, real_img=real_img, real_c=real_c, gen_z=gen_z, gen_c=gen_c, sync=sync, gain=gain, img_fts=real_img_feature, txt_fts=real_txt_feature, mixing_prob=mixing_prob, temp=temp, lam=lam, gather=gather, d_use_fts=d_use_fts, itd=itd, itc=itc, iid=iid, iic=iic)
 
             # Update weights.
             phase.module.requires_grad_(False)
@@ -446,6 +471,28 @@ def training_loop(
         snapshot_data = None
         if (network_snapshot_ticks is not None) and (done or cur_tick % network_snapshot_ticks == 0):
             snapshot_data = dict(training_set_kwargs=dict(training_set_kwargs))
+
+            snapshot_data['args'] = dict(  # newly added, not available in our pre-trained models
+                num_gpus=num_gpus,
+                batch_size=batch_size,
+                batch_gpu=batch_gpu,
+                G_reg_interval=G_reg_interval,
+                D_reg_interval=D_reg_interval,
+                allow_tf32=allow_tf32,
+                f_dim=f_dim,
+                d_use_norm=d_use_norm,
+                d_use_fts=d_use_fts,
+                mixing_prob=mixing_prob,
+                lam=lam,
+                temp=temp,
+                gather=gather,
+                itd=itd,
+                itc=itc,
+                iid=iid,
+                iic=iic,
+                loss_kwargs = loss_kwargs,
+            )
+
             for name, module in [('G', G), ('D', D), ('G_ema', G_ema), ('augment_pipe', augment_pipe)]:
                 if module is not None:
                     if num_gpus > 1:

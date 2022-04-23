@@ -9,12 +9,14 @@ import torchvision.transforms as T
 import clip
 import dnnlib
 import random
-#----------------------------------------------------------------------------
+# import matplotlib.pyplot as plt
+
 
 class Loss:
     def accumulate_gradients(self, phase, real_img, real_c, gen_z, gen_c, sync, gain, real_features): # to be overridden by subclass
         raise NotImplementedError()
 
+# trainable perturbations
 class Model(torch.nn.Module):
     def __init__(self, device):
         super(Model, self).__init__()
@@ -38,7 +40,7 @@ class Model(torch.nn.Module):
         std = F.leaky_relu(self.linear7(std))
         std = self.linear8(std)
         return mu + std.exp()*(torch.randn(mu.shape).to(self.device))
-    
+
     def loss(self, real, fake, temp=0.1, lam=0.5):
         sim = torch.cosine_similarity(real.unsqueeze(1), fake.unsqueeze(0), dim=-1)
         if temp > 0.:
@@ -75,12 +77,11 @@ class StyleGAN2Loss(Loss):
         self.mapper = Model(device)
         self.mapper.load_state_dict(torch.load('./implicit.0.001.64.True.0.0.pth', map_location='cpu')) # path to the noise mapping network
         self.mapper.to(device)
-        
-        
+
     def run_G(self, z, c, sync, txt_fts=None, ):
         with misc.ddp_sync(self.G_mapping, sync):
             ws = self.G_mapping(z, c)
-                
+
             if self.style_mixing_prob > 0:
                 new_ws = self.G_mapping(torch.randn_like(z), c, skip_w_avg_update=True)
 
@@ -88,7 +89,7 @@ class StyleGAN2Loss(Loss):
                     cutoff = torch.empty([], dtype=torch.int64, device=ws.device).random_(1, ws.shape[1])
                     cutoff = torch.where(torch.rand([], device=ws.device) < self.style_mixing_prob, cutoff, torch.full_like(cutoff, ws.shape[1]))
                     ws[:, cutoff:] = new_ws[:, cutoff:]
-                
+
         with misc.ddp_sync(self.G_synthesis, sync):
             img = self.G_synthesis(ws, fts=txt_fts)
         return img, ws
@@ -99,11 +100,11 @@ class StyleGAN2Loss(Loss):
         with misc.ddp_sync(self.D, sync):
             logits, d_fts = self.D(img, c, fts=fts)
         return logits, d_fts
-    
+
     def normalize(self):
         return T.Compose([
             T.Normalize((0.48145466, 0.4578275, 0.40821073), (0.26862954, 0.26130258, 0.27577711)),
-        ])    
+        ])
     
     def full_preprocess(self, img, mode='bicubic', ratio=0.5):
         full_size = img.shape[-2]
@@ -125,20 +126,18 @@ class StyleGAN2Loss(Loss):
 
     def custom_preprocess(self, img, ind, cut_num, mode='bicubic'):   # more to be implemented here
         full_size = img.shape[-2]
-        
+
         grid = np.sqrt(cut_num)
         most_right = min(int((ind%grid + 1)*full_size/grid), full_size)
         most_bottom = min(int((ind//grid + 1)*full_size/grid), full_size)
-        
+
         cut_size = torch.randint(int(full_size//(grid+1)), int(min(min(full_size//2, most_right), most_bottom)), ()) # TODO: tune this later
         left = torch.randint(0, most_right-cut_size, ())
         top = torch.randint(0, most_bottom-cut_size, ())
         cropped_img = img[:, :, top:top+cut_size, left:left+cut_size]
         reshaped_img = F.interpolate(cropped_img, (224, 224), mode=mode, align_corners=False)
 
-
         reshaped_img = (reshaped_img + 1.)*0.5 # range in [0., 1.] now
-        
         reshaped_img = self.normalize()(reshaped_img)
 
         return  reshaped_img
@@ -168,33 +167,31 @@ class StyleGAN2Loss(Loss):
         do_Gpl   = (phase in ['Greg', 'Gboth']) and (self.pl_weight != 0)
         do_Dr1   = (phase in ['Dreg', 'Dboth']) and (self.r1_gamma != 0)
 
-        
         # augmentation
         aug_level_1 = 0.1
         aug_level_2 = 0.75
-#         print(torch.cosine_similarity(img_fts, txt_fts, dim=-1))
-        
-        # the semantic  similarity of perturbed feature with real feature would be:
+        # print(torch.cosine_similarity(img_fts, txt_fts, dim=-1))
+
+        # the semantic similarity of perturbed feature with real feature would be:
         # sim >= (sqrt(1 - aug_level^2)-aug_level)/(sqrt(1 + 2*aug_level*sqrt(1 - aug_level^2)))
         mixing_prob = mixing_prob # probability to use img_fts instead of txt_fts
         random_noise = torch.randn(txt_fts.shape).to(img_fts.device)# + torch.randn((1, 512)).to(img_fts.device)
         random_noise = random_noise/random_noise.norm(dim=-1, keepdim=True)
-        
-        txt_fts_ = txt_fts*(1-aug_level_1) + random_noise*aug_level_1
+
+        txt_fts_ = txt_fts*(1-aug_level_1) + random_noise*aug_level_1 # TODO: try w/o this aug? (seems quite small, so keep it)
         txt_fts_ = txt_fts_/txt_fts_.norm(dim=-1, keepdim=True)
         if txt_fts.shape[-1] == img_fts.shape[-1]:
-# #             Gaussian purterbation
+            # Gaussian purterbation
             img_fts_ = img_fts*(1-aug_level_2) + random_noise*aug_level_2
 
             # learned generation
-#             with torch.no_grad():
-#                 normed_real_full_img = self.full_preprocess(real_img, ratio=0.99)
-#                 img_fts_real_full_ = self.clip_model.encode_image(normed_real_full_img).float()
-#                 img_fts_real_full_ = img_fts_real_full_/img_fts_real_full_.norm(dim=-1, keepdim=True)
-                
-#                 # img_fts_real_full_ = img_fts
-#                 img_fts_ = self.mapper(img_fts_real_full_) + img_fts_real_full_
-            
+            # with torch.no_grad():
+            #     normed_real_full_img = self.full_preprocess(real_img, ratio=0.99)
+            #     img_fts_real_full_ = self.clip_model.encode_image(normed_real_full_img).float()
+            #     img_fts_real_full_ = img_fts_real_full_/img_fts_real_full_.norm(dim=-1, keepdim=True)
+            #     # img_fts_real_full_ = img_fts
+            #     img_fts_ = self.mapper(img_fts_real_full_) + img_fts_real_full_
+
             img_fts_ = img_fts_/img_fts_.norm(dim=-1, keepdim=True)
             if mixing_prob > 0.99:
                 txt_fts_ = img_fts_
@@ -203,14 +200,12 @@ class StyleGAN2Loss(Loss):
             else:
                 txt_fts_ = torch.where(torch.rand([txt_fts_.shape[0], 1], device=txt_fts_.device) < mixing_prob, img_fts_, txt_fts_)
 
-            
         img_img_d = iid # discriminator
         img_img_c = iic  # clip
         img_txt_d = itd # discriminator
         img_txt_c = itc # clip
         temp = temp
         lam = lam
-        
 
         def gather_tensor(input_tensor, gather_or_not):
             if gather_or_not:
@@ -219,11 +214,11 @@ class StyleGAN2Loss(Loss):
                 output_tensor = [torch.zeros_like(input_tensor) for _ in range(world_size)]
                 torch.distributed.all_gather(output_tensor, input_tensor)
                 output_tensor[rank] = input_tensor
-    #           # print(torch.cat(output_tensor).size())
+              # print(torch.cat(output_tensor).size())
                 return torch.cat(output_tensor)
             else:
                 return input_tensor
-        
+
         txt_fts_all = gather_tensor(txt_fts_, gather)
 
         # Gmain: Maximize logits for generated images.
@@ -231,30 +226,28 @@ class StyleGAN2Loss(Loss):
             with torch.autograd.profiler.record_function('Gmain_forward'):
                 gen_img, _gen_ws = self.run_G(gen_z, gen_c, txt_fts=txt_fts_, sync=(sync and not do_Gpl)) # May get synced by Gpl.
                 gen_logits, gen_d_fts = self.run_D(gen_img, gen_c, sync=False, fts=txt_fts_)
-                
+
                 gen_d_fts_all = gather_tensor(gen_d_fts, gather)
-                
+
                 training_stats.report('Loss/scores/fake', gen_logits)
                 training_stats.report('Loss/signs/fake', gen_logits.sign())
-              
+
                 loss_Gmain = torch.nn.functional.softplus(-gen_logits) # -log(sigmoid(gen_logits))
 
                 normed_gen_full_img = self.full_preprocess(gen_img)
                 img_fts_gen_full = self.clip_model.encode_image(normed_gen_full_img)
                 img_fts_gen_full = img_fts_gen_full/img_fts_gen_full.norm(dim=-1, keepdim=True)
-              
-                    
+
                 img_fts_gen_full_all = gather_tensor(img_fts_gen_full, gather)
                 img_fts_all = gather_tensor(img_fts, gather)
                 if img_txt_c > 0.:
                     clip_loss_img_txt = self.contra_loss(temp, img_fts_gen_full_all, txt_fts_all, lam)
                     loss_Gmain = loss_Gmain - img_txt_c*clip_loss_img_txt.mean()
-                    
+
                 if img_img_c > 0.:
                     clip_loss_img_img = self.contra_loss(temp, img_fts_gen_full_all, img_fts_all, lam)
                     loss_Gmain = loss_Gmain - img_img_c*clip_loss_img_img.mean()
-                    
-                
+
                 if img_txt_d > 0.:
                     loss_Gmain = loss_Gmain - img_txt_d*self.contra_loss(temp, gen_d_fts_all, txt_fts_all, lam).mean()
                 if img_img_d > 0.:
@@ -318,7 +311,7 @@ class StyleGAN2Loss(Loss):
                     if img_txt_d > 0.:
                         real_d_fts_all = gather_tensor(real_d_fts, gather)
                         loss_Dreal = loss_Dreal - img_txt_d*self.contra_loss(temp, real_d_fts_all, txt_fts_all, lam).mean()
-                    
+
                     training_stats.report('Loss/D/loss', loss_Dgen + loss_Dreal)
 
                 loss_Dr1 = 0
@@ -332,7 +325,3 @@ class StyleGAN2Loss(Loss):
 
             with torch.autograd.profiler.record_function(name + '_backward'):
                 (real_logits * 0 + loss_Dreal + loss_Dr1).mean().mul(gain).backward()
-
-# ----------------------------------------------------------------------------
-
-

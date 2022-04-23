@@ -22,6 +22,7 @@ class UserError(Exception):
 def setup_training_loop_kwargs(
     f_dim      = None,
     cond_vec   = None,
+    use_fmri   = False,
     d_use_norm = None, # normalize the feature extracted by discriminator or not
     d_use_fts  = None, # discriminator extract semantic feature or not
     mixing_prob= None, # mixing probability of ground-truth and language-free generated pairs, mixing_prob=0 means only use ground-truth, mixing_prob=1. means using only pseudo pairs(language-free)
@@ -178,8 +179,8 @@ def setup_training_loop_kwargs(
         test_data = data
     # args.training_set_kwargs = dnnlib.EasyDict(class_name='training.dataset.ImageFolderDataset', path=data, use_labels=True, max_size=None, xflip=False, use_clip=True, ratio=args.ratio)
     # args.testing_set_kwargs = dnnlib.EasyDict(class_name='training.dataset.ImageFolderDataset', path=test_data, use_labels=True, max_size=None, xflip=False, use_clip=True, ratio=1.0)
-    args.training_set_kwargs = dnnlib.EasyDict(class_name='training.dataset.NsdClipDataset', path=data, use_mapped=cond_vec, use_fmri=False, fmri_pad=15744, use_clip=True, threshold=1.5, normalize_clip=True, use_labels=True, max_size=None, xflip=False, ratio=args.ratio)
-    args.testing_set_kwargs = dnnlib.EasyDict(class_name='training.dataset.NsdClipDataset', path=test_data, use_mapped=cond_vec, use_fmri=False, fmri_pad=15744, use_clip=True, threshold=1.5, normalize_clip=True, use_labels=True, max_size=None, xflip=False, ratio=1.0)
+    args.training_set_kwargs = dnnlib.EasyDict(class_name='training.dataset.NsdClipDataset', path=data, use_mapped=cond_vec, use_fmri=use_fmri, fmri_pad=15744, use_clip=True, threshold=1.5, normalize_clip=True, use_labels=True, max_size=None, xflip=False, ratio=args.ratio)
+    args.testing_set_kwargs = dnnlib.EasyDict(class_name='training.dataset.NsdClipDataset', path=test_data, use_mapped=cond_vec, use_fmri=use_fmri, fmri_pad=15744, use_clip=True, threshold=1.5, normalize_clip=True, use_labels=True, max_size=None, xflip=False, ratio=1.0)
 
     args.data_loader_kwargs = dnnlib.EasyDict(pin_memory=False, num_workers=1, prefetch_factor=2)
     try:
@@ -497,6 +498,7 @@ class CommaSeparatedList(click.ParamType):
 @click.option('--fmap', help='', type=float)
 @click.option('--ratio', help='ratio of data with ground-truth text used', type=float)
 @click.option('--cond_vec', help='how the condition vector is provided and/or mixed', type=click.Choice(['img', 'cap', 'add', 'cat', 'mix']))
+@click.option('--use_fmri', help='whether to load fmri signals, set to True if doing end to end training', type=bool, metavar='BOOL')
 
 # General options.
 @click.option('--outdir', help='Where to save the results', required=True, metavar='DIR')

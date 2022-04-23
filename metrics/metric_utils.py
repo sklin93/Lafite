@@ -12,6 +12,7 @@ import sys
 sys.path.append('/home/sikun/bold5k/CLIP')
 import clip
 import torchvision.transforms as T
+# import matplotlib.pyplot as plt
 #----------------------------------------------------------------------------
 #
 # class MetricOptions:
@@ -259,17 +260,17 @@ def compute_feature_stats_for_dataset(opts, detector_url, detector_kwargs, rel_l
 #----------------------------------------------------------------------------
 def compute_feature_stats_for_generator(opts, detector_url, detector_kwargs, rel_lo=0, rel_hi=1, batch_size=64, batch_gen=None, jit=False, max_items=None, **stats_kwargs):
     G = copy.deepcopy(opts.G).eval().requires_grad_(False).to(opts.device)
+
+    max_items = 30000 #if (max_items is None) else max_items
+    dataset = dnnlib.util.construct_class_by_name(**opts.testset_kwargs)
+    num_items = min(len(dataset), max_items)
+
     if opts.img_recon:
         batch_gen = batch_size = 4
-        dataset = dnnlib.util.construct_class_by_name(**opts.testset_kwargs)
         data_loader_kwargs = dict(pin_memory=False, num_workers=1, prefetch_factor=2)
 
         # Initialize.
-        num_items = len(dataset)
-#         if max_items is not None:
-#             num_items = 30000#max_items
-        num_items = 30000#min(num_items, 30000)
-#         print(f'generating {num_items} images')
+        # print(f'generating {num_items} images')
         stats = FeatureStats(max_items=num_items, **stats_kwargs)
         progress = opts.progress.sub(tag='generator features', num_items=num_items, rel_lo=rel_lo, rel_hi=rel_hi)
         detector = get_feature_detector(url=detector_url, device=opts.device, num_gpus=opts.num_gpus, rank=opts.rank,
@@ -300,34 +301,34 @@ def compute_feature_stats_for_generator(opts, detector_url, detector_kwargs, rel
 
     elif opts.txt_recon:
         batch_gen = batch_size = 16
-        dataset = dnnlib.util.construct_class_by_name(**opts.testset_kwargs)
         data_loader_kwargs = dict(pin_memory=False, num_workers=1, prefetch_factor=2)
         
         # Initialize.
-        num_items = len(dataset)
-#         if max_items is not None:
-#             num_items = 30000#max_items
-        num_items = 30000# min(num_items, 30000)
         stats = FeatureStats(max_items=num_items, **stats_kwargs)
         progress = opts.progress.sub(tag='generator features', num_items=num_items, rel_lo=rel_lo, rel_hi=rel_hi)
         detector = get_feature_detector(url=detector_url, device=opts.device, num_gpus=opts.num_gpus, rank=opts.rank,
                                         verbose=progress.verbose)
-        
+
         item_subset = [(i * opts.num_gpus + opts.rank) % len(dataset) for i in range((len(dataset) - 1) // opts.num_gpus + 1)]
         dataloader_iterator = iter(torch.utils.data.DataLoader(dataset=dataset, sampler=item_subset, batch_size=batch_size, **data_loader_kwargs))
         while not stats.is_full():
             try:
                 images, _labels, img_fts, txt_fts = next(dataloader_iterator)
+                # print(images.shape, _labels, img_fts.shape, txt_fts.shape) # torch.Size([16, 3, 256, 256]) tensor([], size=(16, 0)) torch.Size([16, 512]) torch.Size([16, 512])
+                # plt.plot(img_fts[0].cpu().numpy())
+                # plt.show()
+                # plt.plot(txt_fts[0].cpu().numpy())
+                # plt.show()
             except:
                 dataloader_iterator = iter(torch.utils.data.DataLoader(dataset=dataset, sampler=item_subset, batch_size=batch_size, **data_loader_kwargs))
                 images, _labels, img_fts, txt_fts = next(dataloader_iterator)
-                
+                print('entered except')
+
             with torch.no_grad():
                 clip_txt_features = txt_fts/txt_fts.norm(dim=-1, keepdim=True)#.view((batch_size, -1))
                 z = torch.randn([txt_fts.size()[0], G.z_dim], device=opts.device)
                 imgs = G(z=z, c=_labels.to(opts.device), fts=clip_txt_features.to(opts.device))
                 imgs = (imgs * 127.5 + 128).clamp(0, 255).to(torch.uint8)
-
 
             if imgs.shape[1] == 1:
                 imgs = imgs.repeat([1, 3, 1, 1])
@@ -342,8 +343,6 @@ def compute_feature_stats_for_generator(opts, detector_url, detector_kwargs, rel
             batch_gen = min(batch_size, 4)
         assert batch_size % batch_gen == 0
 
-        dataset = dnnlib.util.construct_class_by_name(**opts.testset_kwargs)
-
         # Image generation func.
         def run_generator(z, c):
             img = G(z=z, c=c, **opts.G_kwargs)
@@ -357,13 +356,10 @@ def compute_feature_stats_for_generator(opts, detector_url, detector_kwargs, rel
             run_generator = torch.jit.trace(run_generator, [z, c], check_trace=False)
 
         # Initialize.
-        num_items = len(dataset)
-        if max_items is not None:
-            num_items = min(num_items, max_items)
         stats = FeatureStats(max_items=num_items, **stats_kwargs)
-        
-#         stats = FeatureStats(**stats_kwargs)
-#         assert stats.max_items is not None
+
+        # stats = FeatureStats(**stats_kwargs)
+        # assert stats.max_items is not None
         progress = opts.progress.sub(tag='generator features', num_items=stats.max_items, rel_lo=rel_lo, rel_hi=rel_hi)
         detector = get_feature_detector(url=detector_url, device=opts.device, num_gpus=opts.num_gpus, rank=opts.rank, verbose=progress.verbose)
 
@@ -384,5 +380,3 @@ def compute_feature_stats_for_generator(opts, detector_url, detector_kwargs, rel
         return stats
 
 #----------------------------------------------------------------------------
-
-
