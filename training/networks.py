@@ -302,9 +302,6 @@ class ManiNetwork(torch.nn.Module):
     #           
         if num_ws is not None and w_avg_beta is not None:
             self.register_buffer('w_avg', torch.zeros([w_dim])) 
-            
-        
-            
 
     def forward(self, z, c, w, truncation_psi=1, truncation_cutoff=None, skip_w_avg_update=False):
         # Embed, normalize, and concat inputs.
@@ -378,9 +375,10 @@ class SynthesisLayer(torch.nn.Module):  # <-- added (change)
         activation      = 'lrelu',      # Activation function: 'relu', 'lrelu', etc.
         resample_filter = [1,3,3,1],    # Low-pass filter to apply when resampling activations.
         conv_clamp      = None,         # Clamp the output of convolution layers to +-X, None = disable clamping.
-        channels_last   = False,  # Use channels_last format for the weights?
-        structure = 0,  # added (structure == 3 is the original StyleGAN2)
-        f_dim = 512
+        channels_last   = False,        # Use channels_last format for the weights?
+        structure = 0,                  # Structure == 3 is the original StyleGAN2)
+        f_dim = 512,
+        f_dim2 = 512,                   # If multiple vectors are served as conditions
     ):
         super().__init__()
         self.resolution = resolution
@@ -414,12 +412,22 @@ class SynthesisLayer(torch.nn.Module):  # <-- added (change)
 
         elif self.structure == 2:
             self.pre_0 = FullyConnectedLayer(f_dim, _f_dim, activation='lrelu', lr_multiplier=0.01) # pre process text features  
-            self.pre_1 = FullyConnectedLayer(_f_dim, 512, activation='lrelu', lr_multiplier=0.01)   
+            self.pre_1 = FullyConnectedLayer(_f_dim, 512, activation='lrelu', lr_multiplier=0.01)
             self.affine_0 = FullyConnectedLayer(w_dim+512, in_channels, bias_init=1)# f([w, txt])
             
 
         elif self.structure == 3:
             self.affine = FullyConnectedLayer(w_dim, in_channels, bias_init=1)
+
+        elif self.structure == 4:
+            self.pre_0 = FullyConnectedLayer(f_dim, _f_dim, activation='lrelu', lr_multiplier=0.01) # pre process text features  
+            self.pre_1 = FullyConnectedLayer(_f_dim, 512, activation='lrelu', lr_multiplier=0.01)
+            self.pre_01 = FullyConnectedLayer(f_dim2, _f_dim, activation='lrelu', lr_multiplier=0.01) # pre process text features  
+            self.pre_11 = FullyConnectedLayer(_f_dim, 512, activation='lrelu', lr_multiplier=0.01)
+            self.affine_1 = FullyConnectedLayer(w_dim+512*2, in_channels, bias_init=1)# f([w, txt])
+            self.f_dim = f_dim
+            self.f_dim2 = f_dim2
+
         else:
             raise('Structure undefined')
             
@@ -458,6 +466,16 @@ class SynthesisLayer(torch.nn.Module):  # <-- added (change)
 
             elif self.structure == 3:
                 styles = self.affine(w)
+
+            elif self.structure == 4:
+                fts1 = fts[:, :self.f_dim]
+                fts2 = fts[:, self.f_dim:self.f_dim+self.f_dim2]
+                fts1 = self.pre_0(fts1)
+                fts1 = self.pre_1(fts1)
+                fts2 = self.pre_01(fts2)
+                fts2 = self.pre_11(fts2)
+                styles = self.affine_1(torch.cat([fts1, fts2, w], dim=-1))
+
             else:
                 raise('structure undefined')
                 
@@ -484,7 +502,8 @@ class SynthesisLayer(torch.nn.Module):  # <-- added (change)
 
 @persistence.persistent_class
 class ToRGBLayer(torch.nn.Module):
-    def __init__(self, in_channels, out_channels, w_dim, kernel_size=1, conv_clamp=None, channels_last=False, structure=0, f_dim=512):
+    def __init__(self, in_channels, out_channels, w_dim, kernel_size=1, conv_clamp=None, channels_last=False,
+        structure=0, f_dim=512, f_dim2=512):
         super().__init__()
         self.conv_clamp = conv_clamp
         self.structure = structure
@@ -514,6 +533,16 @@ class ToRGBLayer(torch.nn.Module):
 
         elif self.structure == 3:
             self.affine = FullyConnectedLayer(w_dim, in_channels, bias_init=1)#wed
+
+        elif self.structure == 4:
+            self.pre_0 = FullyConnectedLayer(f_dim, _f_dim, activation='lrelu', lr_multiplier=0.01) # pre process text features  
+            self.pre_1 = FullyConnectedLayer(_f_dim, 512, activation='lrelu', lr_multiplier=0.01)
+            self.pre_01 = FullyConnectedLayer(f_dim2, _f_dim, activation='lrelu', lr_multiplier=0.01) # pre process text features  
+            self.pre_11 = FullyConnectedLayer(_f_dim, 512, activation='lrelu', lr_multiplier=0.01)
+            self.affine_1 = FullyConnectedLayer(w_dim+512*2, in_channels, bias_init=1)# f([w, txt])
+            self.f_dim = f_dim
+            self.f_dim2 = f_dim2
+
         else:
             raise('Structure undefined')
             
@@ -548,6 +577,16 @@ class ToRGBLayer(torch.nn.Module):
 
             elif self.structure == 3:
                 styles = self.affine(w)
+
+            elif self.structure == 4:
+                fts1 = fts[:, :self.f_dim]
+                fts2 = fts[:, self.f_dim:self.f_dim+self.f_dim2]
+                fts1 = self.pre_0(fts1)
+                fts1 = self.pre_1(fts1)
+                fts2 = self.pre_01(fts2)
+                fts2 = self.pre_11(fts2)
+                styles = self.affine_1(torch.cat([fts1, fts2, w], dim=-1))
+
             else:
                 raise('structure undefined')                
             styles = styles * self.weight_gain
@@ -578,6 +617,7 @@ class SynthesisBlock(torch.nn.Module):
         fp16_channels_last  = False,        # Use channels-last memory format with FP16?
         structure = 0,
         f_dim = 512,
+        f_dim2 = 512,
         **layer_kwargs,                     # Arguments for SynthesisLayer.
     ):
         assert architecture in ['orig', 'skip', 'resnet']
@@ -599,7 +639,8 @@ class SynthesisBlock(torch.nn.Module):
 
         if in_channels != 0:
             self.conv0 = SynthesisLayer(in_channels, out_channels, w_dim=w_dim, resolution=resolution, up=2,
-                resample_filter=resample_filter, conv_clamp=conv_clamp, channels_last=self.channels_last, structure=structure, f_dim=f_dim, **layer_kwargs)
+                resample_filter=resample_filter, conv_clamp=conv_clamp, channels_last=self.channels_last,
+                structure=structure, f_dim=f_dim, f_dim2=f_dim2, **layer_kwargs)
             self.num_conv += 1
 
         self.conv1 = SynthesisLayer(out_channels, out_channels, w_dim=w_dim, resolution=resolution,
@@ -608,7 +649,7 @@ class SynthesisBlock(torch.nn.Module):
 
         if is_last or architecture == 'skip':
             self.torgb = ToRGBLayer(out_channels, img_channels, w_dim=w_dim,
-                conv_clamp=conv_clamp, channels_last=self.channels_last, structure=structure, f_dim=f_dim)
+                conv_clamp=conv_clamp, channels_last=self.channels_last, structure=structure, f_dim=f_dim, f_dim2=f_dim2)
             self.num_torgb += 1
 
         if in_channels != 0 and architecture == 'resnet':
@@ -696,7 +737,8 @@ class SynthesisNetwork(torch.nn.Module):
         channel_base    = 32768,    # Overall multiplier for the number of channels.
         channel_max     = 512,      # Maximum number of channels in any layer.
         num_fp16_res    = 0,        # Use FP16 for the N highest resolutions.
-        change        = 256,
+        change          = 256,
+        structure       = 2,        # default structure
         **block_kwargs,             # Arguments for SynthesisBlock.
     ):
         assert img_resolution >= 4 and img_resolution & (img_resolution - 1) == 0
@@ -718,7 +760,7 @@ class SynthesisNetwork(torch.nn.Module):
             is_last = (res == self.img_resolution)
             
             if res <= change:
-                structure = 2
+                structure = structure
             else:
                 structure = 1
                 
@@ -729,9 +771,6 @@ class SynthesisNetwork(torch.nn.Module):
                 self.num_ws += block.num_torgb
             setattr(self, f'b{res}', block)
 
-            
-            
-            
     def forward(self, ws, fts, styles=None, return_styles=False, return_styles_res=False, **block_kwargs):
         block_ws = []
         block_styles = []
@@ -799,6 +838,10 @@ class Generator(torch.nn.Module):
         self.mapping_kwargs = mapping_kwargs
 
     def forward(self, z, c, truncation_psi=1, truncation_cutoff=None, fts=None, styles=None, return_styles=False, step=1, w=None, return_w=False, **synthesis_kwargs):
+        # if fts is not None:
+        #     print(f'Generator fts shape: {fts.shape}')
+        # else:
+        #     print('Generator fts None')
         if w is not None:
             ws = w
         else:
@@ -819,7 +862,6 @@ class Generator(torch.nn.Module):
             return img, styles
         else:
             return img
-        
         
 #     def generate_with_w(self, ws):
 #         img = self.synthesis(ws, **self.synthesis_kwargs)
@@ -950,8 +992,9 @@ class DiscriminatorEpilogue(torch.nn.Module):
         mbstd_num_channels  = 1,        # Number of features for the minibatch standard deviation layer, 0 = disable.
         activation          = 'lrelu',  # Activation function: 'relu', 'lrelu', etc.
         conv_clamp          = None,     # Clamp the output of convolution layers to +-X, None = disable clamping.
-        f_dim  = 512,
-                 
+        f_dim               = 512,
+        f_dim2              = 512,
+        structure           = 2,
     ):
         assert architecture in ['orig', 'skip', 'resnet']
         super().__init__()
@@ -969,6 +1012,11 @@ class DiscriminatorEpilogue(torch.nn.Module):
         self.fc = FullyConnectedLayer(in_channels * (resolution ** 2), in_channels, activation=activation)
         if use_fts:
             self.fts = FullyConnectedLayer(in_channels, f_dim)
+            if structure == 4:
+                self.fts2 = FullyConnectedLayer(in_channels, f_dim2)
+            self.structure = structure
+            self.f_dim = f_dim
+            self.f_dim2 = f_dim2
         self.out = FullyConnectedLayer(in_channels, 1 )#if cmap_dim == 0 else cmap_dim)
 
     def forward(self, x, img, cmap, use_norm=True, fts=None, force_fp32=False):
@@ -983,20 +1031,26 @@ class DiscriminatorEpilogue(torch.nn.Module):
             misc.assert_shape(img, [None, self.img_channels, self.resolution, self.resolution])
             img = img.to(dtype=dtype, memory_format=memory_format)
             x = x + self.fromrgb(img)
-            
+
         # Main layers.
         if self.mbstd is not None:
             x = self.mbstd(x)
-      
+
         x = self.conv(x)
         fc = self.fc(x.flatten(1))
         x = self.out(fc)
+
         if self.use_fts:
             d_fts = self.fts(fc)
             if use_norm:
                 d_fts = d_fts/d_fts.norm(dim=-1, keepdim=True)
-        
-            x = x + (d_fts*fts).sum()
+            if self.structure == 4:
+                d_fts2 = self.fts2(fc)
+                if use_norm:
+                    d_fts2 = d_fts2/d_fts2.norm(dim=-1, keepdim=True)
+                x = x + (d_fts*fts[:, :self.f_dim]).sum() + (d_fts2*fts[:, self.f_dim:self.f_dim+self.f_dim2]).sum()
+            else:
+                x = x + (d_fts*fts).sum()
         else:
             d_fts = fts
         # Conditioning. original one
@@ -1005,7 +1059,10 @@ class DiscriminatorEpilogue(torch.nn.Module):
             x = (x * cmap).sum(dim=1, keepdim=True) * (1 / np.sqrt(self.cmap_dim))
 
         assert x.dtype == dtype
-        return x, d_fts
+        if self.structure == 4:
+            return x, d_fts, d_fts2
+        else:
+            return x, d_fts
 
 #----------------------------------------------------------------------------
 
@@ -1043,7 +1100,7 @@ class Discriminator(torch.nn.Module):
             cmap_dim = channels_dict[4]
         if c_dim == 0:
             cmap_dim = 0
-        
+
         common_kwargs = dict(img_channels=img_channels, architecture=architecture, conv_clamp=conv_clamp)
         cur_layer_idx = 0
         for res in self.block_resolutions:
@@ -1055,9 +1112,9 @@ class Discriminator(torch.nn.Module):
                 first_layer_idx=cur_layer_idx, use_fp16=use_fp16, **block_kwargs, **common_kwargs)
             setattr(self, f'b{res}', block)
             cur_layer_idx += block.num_layers
-            
-        
+
         self.b4 = DiscriminatorEpilogue(channels_dict[4], use_fts=self.use_fts, cmap_dim=cmap_dim, resolution=4, **epilogue_kwargs, **common_kwargs)
+        self.epilogue_kwargs = epilogue_kwargs
 
     def forward(self, img, c, fts=None, **block_kwargs):
         x = None
@@ -1066,9 +1123,12 @@ class Discriminator(torch.nn.Module):
             x, img = block(x, img, fts=fts, **block_kwargs)
 
         cmap = None
-            
-            
-        x, d_fts = self.b4(x, img, cmap, fts=fts, use_norm=self.use_norm)
-        return x, d_fts
+
+        if self.epilogue_kwargs.structure == 4:
+            x, d_fts, d_fts2 = self.b4(x, img, cmap, fts=fts, use_norm=self.use_norm)
+            return x, d_fts, d_fts2
+        else:
+            x, d_fts = self.b4(x, img, cmap, fts=fts, use_norm=self.use_norm)
+            return x, d_fts
 
 #----------------------------------------------------------------------------
