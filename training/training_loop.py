@@ -120,6 +120,7 @@ def training_loop(
     abort_fn                = None,     # Callback function for determining whether to abort training. Must return consistent results across ranks.
     progress_fn             = None,     # Callback function for updating training progress. Called for all ranks.
     f_dim                   = 512,
+    f_dim2                  = 0,
     d_use_norm              = True,
     d_use_fts               = True,
     mixing_prob             = 0., 
@@ -134,7 +135,8 @@ def training_loop(
     finetune                = False,
     ratio                   = 1.,
     use_fmri                = False,
-
+    structure               = 2,
+    enabled_forced_map      = False,
 ):
     # Initialize.
     start_time = time.time()
@@ -175,13 +177,26 @@ def training_loop(
             resume_data = legacy.load_network_pkl(f)
         for name, module in [('G', G), ('D', D), ('G_ema', G_ema)]:
             print(name, module)
-            misc.copy_params_and_buffers(resume_data[name], module, require_all=False)
+            forced_map = {}
+            if enabled_forced_map: # to copy the same weights to different pre_0 and pre_1 branches
+                forced_map = {}
+                for i in [4, 8, 16, 32, 64, 128, 256]:
+                    for j in ['conv0', 'conv1' , 'torgb']:
+                        for k in [0, 1]:
+                            # if i == 4 and j == 'conv0':
+                            #     continue
+                            for v in ['weight', 'bias']:
+                                cur_k = f'synthesis.b{i}.{j}.pre_{k}1.{v}'
+                                cur_v = f'synthesis.b{i}.{j}.pre_{k}.{v}'
+                                # print(cur_k, ',', cur_v)
+                                forced_map[cur_k] = cur_v
+            misc.copy_params_and_buffers(resume_data[name], module, require_all=False, forced_map=forced_map)
 
     # Print network summary tables.
     if rank == 0:
         z = torch.empty([batch_gpu, G.z_dim], device=device)
         c = torch.empty([batch_gpu, G.c_dim], device=device)
-        fts = torch.empty([batch_gpu, f_dim], device=device)
+        fts = torch.empty([batch_gpu, f_dim+f_dim2], device=device)
         img = misc.print_module_summary(G, [z, c])
         misc.print_module_summary(D, [img, c, fts])
 
@@ -278,6 +293,8 @@ def training_loop(
                 txt_fts = clip_model.encode_text(tokenized_text).view(1, -1).repeat(labels.shape[0], 1)
                 f_txt = txt_fts.to(device)
                 f_txt /= f_txt.norm(dim=-1, keepdim=True)
+                if structure == 4:
+                    f_txt = torch.cat((f_txt, f_txt), -1)                
                 f_txt_ = f_txt.split(batch_gpu)
                 txt_fts_list.append(f_txt_)
                 img_list = []
@@ -363,7 +380,10 @@ def training_loop(
                 for round_idx, (real_img, real_c, gen_z, gen_c, real_img_feature, real_txt_feature, fmri) in enumerate(zip(phase_real_img, phase_real_c, phase_gen_z, phase_gen_c, phase_img_features, phase_txt_features, phase_fmri)):
                     sync = (round_idx == batch_size // (batch_gpu * num_gpus) - 1)
                     gain = phase.interval
-                    loss.accumulate_gradients(phase=phase.name, real_img=real_img, real_c=real_c, gen_z=gen_z, gen_c=gen_c, sync=sync, gain=gain, img_fts=real_img_feature, txt_fts=real_txt_feature, mixing_prob=mixing_prob, temp=temp, lam=lam, gather=gather, d_use_fts=d_use_fts, itd=itd, itc=itc, iid=iid, iic=iic, fmri=fmri)
+                    loss.accumulate_gradients(phase=phase.name, real_img=real_img, real_c=real_c, gen_z=gen_z, gen_c=gen_c,
+                        sync=sync, gain=gain, img_fts=real_img_feature, txt_fts=real_txt_feature,mixing_prob=mixing_prob,
+                        temp=temp, lam=lam,gather=gather, d_use_fts=d_use_fts, itd=itd, itc=itc, iid=iid, iic=iic,
+                        fmri=fmri, structure=structure, f_dim=f_dim, f_dim2=f_dim2)
             else:
                 for round_idx, (real_img, real_c, gen_z, gen_c, real_img_feature, real_txt_feature) in enumerate(zip(phase_real_img, phase_real_c, phase_gen_z, phase_gen_c, phase_img_features, phase_txt_features)):
                     # print(real_img.shape, real_c.shape, gen_z.shape, gen_c, real_img_feature.shape, real_txt_feature.shape)
@@ -372,10 +392,12 @@ def training_loop(
                     # plt.show()
                     # plt.plot(real_txt_feature[0].cpu().numpy())
                     # plt.show()
-
                     sync = (round_idx == batch_size // (batch_gpu * num_gpus) - 1)
                     gain = phase.interval
-                    loss.accumulate_gradients(phase=phase.name, real_img=real_img, real_c=real_c, gen_z=gen_z, gen_c=gen_c, sync=sync, gain=gain, img_fts=real_img_feature, txt_fts=real_txt_feature, mixing_prob=mixing_prob, temp=temp, lam=lam, gather=gather, d_use_fts=d_use_fts, itd=itd, itc=itc, iid=iid, iic=iic)
+                    loss.accumulate_gradients(phase=phase.name, real_img=real_img, real_c=real_c, gen_z=gen_z, gen_c=gen_c,
+                        sync=sync, gain=gain, img_fts=real_img_feature, txt_fts=real_txt_feature, mixing_prob=mixing_prob,
+                        temp=temp, lam=lam, gather=gather, d_use_fts=d_use_fts, itd=itd, itc=itc, iid=iid, iic=iic,
+                        structure=structure, f_dim=f_dim, f_dim2=f_dim2)
 
             # Update weights.
             phase.module.requires_grad_(False)
@@ -480,6 +502,7 @@ def training_loop(
                 D_reg_interval=D_reg_interval,
                 allow_tf32=allow_tf32,
                 f_dim=f_dim,
+                f_dim2=f_dim2,
                 d_use_norm=d_use_norm,
                 d_use_fts=d_use_fts,
                 mixing_prob=mixing_prob,

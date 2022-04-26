@@ -94,12 +94,17 @@ class StyleGAN2Loss(Loss):
             img = self.G_synthesis(ws, fts=txt_fts)
         return img, ws
 
-    def run_D(self, img, c, sync, fts=None):
+    def run_D(self, img, c, sync, fts=None, structure=2):
         if self.augment_pipe is not None:
             img = self.augment_pipe(img)
-        with misc.ddp_sync(self.D, sync):
-            logits, d_fts = self.D(img, c, fts=fts)
-        return logits, d_fts
+        if structure == 4:
+            with misc.ddp_sync(self.D, sync):
+                logits, d_fts, d_fts2 = self.D(img, c, fts=fts)
+            return logits, d_fts, d_fts2
+        else:
+            with misc.ddp_sync(self.D, sync):
+                logits, d_fts = self.D(img, c, fts=fts)
+            return logits, d_fts
 
     def normalize(self):
         return T.Compose([
@@ -160,8 +165,15 @@ class StyleGAN2Loss(Loss):
         else:
             return torch.diagonal(sim)
 
-    def accumulate_gradients(self, phase, real_img, real_c, gen_z, gen_c, sync, gain, img_fts, txt_fts, lam, temp, gather, d_use_fts, itd, itc, iid, iic, mixing_prob=0.):
+    def accumulate_gradients(self, phase, real_img, real_c, gen_z, gen_c, sync, gain, img_fts, lam, temp,
+        gather, d_use_fts, itd, itc, iid, iic, mixing_prob=0., txt_fts=None, fmri=None, structure=2,
+        f_dim=512, f_dim2=512):
+
         assert phase in ['Gmain', 'Greg', 'Gboth', 'Dmain', 'Dreg', 'Dboth']
+        if fmri is not None:
+            pass # TODO: implement run_mapper to get txt_fts from mapper model
+        assert txt_fts is not None
+
         do_Gmain = (phase in ['Gmain', 'Gboth'])
         do_Dmain = (phase in ['Dmain', 'Dboth'])
         do_Gpl   = (phase in ['Greg', 'Gboth']) and (self.pl_weight != 0)
@@ -177,9 +189,19 @@ class StyleGAN2Loss(Loss):
         mixing_prob = mixing_prob # probability to use img_fts instead of txt_fts
         random_noise = torch.randn(txt_fts.shape).to(img_fts.device)# + torch.randn((1, 512)).to(img_fts.device)
         random_noise = random_noise/random_noise.norm(dim=-1, keepdim=True)
-
         txt_fts_ = txt_fts*(1-aug_level_1) + random_noise*aug_level_1 # TODO: try w/o this aug? (seems quite small, so keep it)
+
+        if structure == 4:
+            txt_fts_2 = txt_fts_[:, f_dim:f_dim+f_dim2]
+            txt_fts_gt2 = txt_fts_[:, f_dim+f_dim2:]
+            txt_fts_ = txt_fts_[:, :f_dim]
+        # print(txt_fts_.shape, txt_fts_2.shape, txt_fts_gt2.shape, txt_fts_gt2.shape[-1])
         txt_fts_ = txt_fts_/txt_fts_.norm(dim=-1, keepdim=True)
+        if structure == 4:
+            txt_fts_2 = txt_fts_2/txt_fts_2.norm(dim=-1, keepdim=True)
+            if txt_fts_gt2.shape[-1] > 0:
+                txt_fts_gt2 = txt_fts_gt2/txt_fts_gt2.norm(dim=-1, keepdim=True)
+
         if txt_fts.shape[-1] == img_fts.shape[-1]:
             # Gaussian purterbation
             img_fts_ = img_fts*(1-aug_level_2) + random_noise*aug_level_2
@@ -200,10 +222,10 @@ class StyleGAN2Loss(Loss):
             else:
                 txt_fts_ = torch.where(torch.rand([txt_fts_.shape[0], 1], device=txt_fts_.device) < mixing_prob, img_fts_, txt_fts_)
 
-        img_img_d = iid # discriminator
-        img_img_c = iic  # clip
-        img_txt_d = itd # discriminator
-        img_txt_c = itc # clip
+        img_img_d = iid if structure != 4 else iid / 2. # discriminator
+        img_img_c = iic   # clip
+        img_txt_d = itd if structure != 4 else itd / 2.  # discriminator
+        img_txt_c = itc if structure != 4 else itc / 2.  # clip
         temp = temp
         lam = lam
 
@@ -220,14 +242,24 @@ class StyleGAN2Loss(Loss):
                 return input_tensor
 
         txt_fts_all = gather_tensor(txt_fts_, gather)
+        if structure == 4:
+            txt_fts_2_all = gather_tensor(txt_fts_2, gather)
+            if txt_fts_gt2.shape[-1] > 0:
+                txt_fts_gt2_all = gather_tensor(txt_fts_gt2, gather)
 
         # Gmain: Maximize logits for generated images.
         if do_Gmain:
             with torch.autograd.profiler.record_function('Gmain_forward'):
-                gen_img, _gen_ws = self.run_G(gen_z, gen_c, txt_fts=txt_fts_, sync=(sync and not do_Gpl)) # May get synced by Gpl.
-                gen_logits, gen_d_fts = self.run_D(gen_img, gen_c, sync=False, fts=txt_fts_)
+                if structure == 4:
+                    gen_img, _gen_ws = self.run_G(gen_z, gen_c, txt_fts=torch.cat((txt_fts_, txt_fts_2), -1), sync=(sync and not do_Gpl)) # May get synced by Gpl.
+                    gen_logits, gen_d_fts, gen_d_fts_2 = self.run_D(gen_img, gen_c, sync=False, fts=torch.cat((txt_fts_, txt_fts_2), -1), structure=structure)
+                else:
+                    gen_img, _gen_ws = self.run_G(gen_z, gen_c, txt_fts=txt_fts_, sync=(sync and not do_Gpl)) # May get synced by Gpl.
+                    gen_logits, gen_d_fts = self.run_D(gen_img, gen_c, sync=False, fts=txt_fts_, structure=structure)
 
                 gen_d_fts_all = gather_tensor(gen_d_fts, gather)
+                if structure == 4:
+                    gen_d_fts_2_all = gather_tensor(gen_d_fts_2, gather)
 
                 training_stats.report('Loss/scores/fake', gen_logits)
                 training_stats.report('Loss/signs/fake', gen_logits.sign())
@@ -243,18 +275,35 @@ class StyleGAN2Loss(Loss):
                 if img_txt_c > 0.:
                     clip_loss_img_txt = self.contra_loss(temp, img_fts_gen_full_all, txt_fts_all, lam)
                     loss_Gmain = loss_Gmain - img_txt_c*clip_loss_img_txt.mean()
+                    if structure == 4:
+                        # can also use contra_loss(temp, clip_txt(cap(gen_img)), txt_fts_2_all, lam), but this requires caption model
+                        # if using different model like resnet, use contra_loss(temp, resnet(normed_gen_full_img), txt_fts_2_all, lam)
+                        clip_loss_img_txt2 = self.contra_loss(temp, img_fts_gen_full_all, txt_fts_2_all, lam)
+                        loss_Gmain = loss_Gmain - img_txt_c*clip_loss_img_txt2.mean()
 
                 if img_img_c > 0.:
                     clip_loss_img_img = self.contra_loss(temp, img_fts_gen_full_all, img_fts_all, lam)
                     loss_Gmain = loss_Gmain - img_img_c*clip_loss_img_img.mean()
+                    # similarly, contra_loss(temp, clip_txt(cap(gen_img)), txt_fts_gt2_all, lam), but this requires caption model
 
                 if img_txt_d > 0.:
                     loss_Gmain = loss_Gmain - img_txt_d*self.contra_loss(temp, gen_d_fts_all, txt_fts_all, lam).mean()
+                    if structure == 4:
+                        loss_Gmain = loss_Gmain - img_txt_d*self.contra_loss(temp, gen_d_fts_2_all, txt_fts_2_all, lam).mean()
+
                 if img_img_d > 0.:
-                    with torch.no_grad():
-                        _, g_real_d_fts = self.run_D(real_img.detach(), real_c, sync=False, fts=txt_fts_)
-                    g_real_d_fts_all = gather_tensor(g_real_d_fts, gather)
-                    loss_Gmain = loss_Gmain - img_img_d*self.contra_loss(temp, g_real_d_fts_all, gen_d_fts_all, lam).mean()
+                    if structure == 4:
+                        with torch.no_grad():
+                            _, g_real_d_fts, g_real_d_fts_2 = self.run_D(real_img.detach(), real_c, sync=False, fts=torch.cat((txt_fts_, txt_fts_2), -1), structure=structure)
+                        g_real_d_fts_all = gather_tensor(g_real_d_fts, gather)
+                        g_real_d_fts_2_all = gather_tensor(g_real_d_fts_2, gather)
+                        loss_Gmain = loss_Gmain - img_img_d*self.contra_loss(temp, g_real_d_fts_all, gen_d_fts_all, lam).mean()
+                        loss_Gmain = loss_Gmain - img_img_d*self.contra_loss(temp, g_real_d_fts_2_all, gen_d_fts_2_all, lam).mean()
+                    else:
+                        with torch.no_grad():
+                            _, g_real_d_fts = self.run_D(real_img.detach(), real_c, sync=False, fts=txt_fts_, structure=structure)
+                        g_real_d_fts_all = gather_tensor(g_real_d_fts, gather)
+                        loss_Gmain = loss_Gmain - img_img_d*self.contra_loss(temp, g_real_d_fts_all, gen_d_fts_all, lam).mean()
 
                 training_stats.report('Loss/G/loss', loss_Gmain)
             with torch.autograd.profiler.record_function('Gmain_backward'):
@@ -264,9 +313,18 @@ class StyleGAN2Loss(Loss):
         if do_Gpl:
             with torch.autograd.profiler.record_function('Gpl_forward'):
                 batch_size = gen_z.shape[0] // self.pl_batch_shrink
-                txt_fts_0 = txt_fts_[:batch_size]
-                txt_fts_0.requires_grad_()
-                gen_img, gen_ws = self.run_G(gen_z[:batch_size], gen_c[:batch_size], txt_fts=txt_fts_0, sync=sync)
+
+                if structure == 4:
+                    txt_fts_0 = txt_fts_[:batch_size]
+                    txt_fts_0.requires_grad_()
+                    txt_fts_2_0 = txt_fts_2[:batch_size]
+                    txt_fts_2_0.requires_grad_()
+                    gen_img, gen_ws = self.run_G(gen_z[:batch_size], gen_c[:batch_size], txt_fts=torch.cat((txt_fts_0,txt_fts_2_0), -1), sync=sync)
+                else:
+                    txt_fts_0 = txt_fts_[:batch_size]
+                    txt_fts_0.requires_grad_()
+                    gen_img, gen_ws = self.run_G(gen_z[:batch_size], gen_c[:batch_size], txt_fts=txt_fts_0, sync=sync)
+
                 pl_noise = torch.randn_like(gen_img) / np.sqrt(gen_img.shape[2] * gen_img.shape[3])
                 with torch.autograd.profiler.record_function('pl_grads'), conv2d_gradfix.no_weight_gradients():
                     if d_use_fts:
@@ -287,8 +345,12 @@ class StyleGAN2Loss(Loss):
         loss_Dgen = 0
         if do_Dmain:
             with torch.autograd.profiler.record_function('Dgen_forward'):
-                gen_img, _gen_ws = self.run_G(gen_z, gen_c, txt_fts=txt_fts_, sync=False)
-                gen_logits, gen_d_fts = self.run_D(gen_img, gen_c, sync=False, fts=txt_fts_) # Gets synced by loss_Dreal.
+                if structure == 4:
+                    gen_img, _gen_ws = self.run_G(gen_z, gen_c, txt_fts=torch.cat((txt_fts_, txt_fts_2), -1), sync=False)
+                    gen_logits, gen_d_fts, gen_d_fts_2 = self.run_D(gen_img, gen_c, sync=False, fts=torch.cat((txt_fts_, txt_fts_2), -1), structure=structure)
+                else:
+                    gen_img, _gen_ws = self.run_G(gen_z, gen_c, txt_fts=txt_fts_, sync=False)
+                    gen_logits, gen_d_fts = self.run_D(gen_img, gen_c, sync=False, fts=txt_fts_, structure=structure) # Gets synced by loss_Dreal.
                 training_stats.report('Loss/scores/fake', gen_logits)
                 training_stats.report('Loss/signs/fake', gen_logits.sign())
                 loss_Dgen = torch.nn.functional.softplus(gen_logits) # -log(1 - sigmoid(gen_logits))
@@ -301,7 +363,10 @@ class StyleGAN2Loss(Loss):
             name = 'Dreal_Dr1' if do_Dmain and do_Dr1 else 'Dreal' if do_Dmain else 'Dr1'
             with torch.autograd.profiler.record_function(name + '_forward'):
                 real_img_tmp = real_img.detach().requires_grad_(do_Dr1)
-                real_logits, real_d_fts = self.run_D(real_img_tmp, real_c, sync=sync, fts=txt_fts_)
+                if structure == 4:
+                    real_logits, real_d_fts, real_d_fts_2 = self.run_D(real_img_tmp, real_c, sync=sync, fts=torch.cat((txt_fts_, txt_fts_2), -1), structure=structure)
+                else:
+                    real_logits, real_d_fts = self.run_D(real_img_tmp, real_c, sync=sync, fts=txt_fts_, structure=structure)
                 training_stats.report('Loss/scores/real', real_logits)
                 training_stats.report('Loss/signs/real', real_logits.sign())
 
@@ -311,6 +376,9 @@ class StyleGAN2Loss(Loss):
                     if img_txt_d > 0.:
                         real_d_fts_all = gather_tensor(real_d_fts, gather)
                         loss_Dreal = loss_Dreal - img_txt_d*self.contra_loss(temp, real_d_fts_all, txt_fts_all, lam).mean()
+                        if structure == 4:
+                            real_d_fts_2_all = gather_tensor(real_d_fts_2, gather)
+                            loss_Dreal = loss_Dreal - img_txt_d*self.contra_loss(temp, real_d_fts_2_all, txt_fts_2_all, lam).mean()
 
                     training_stats.report('Loss/D/loss', loss_Dgen + loss_Dreal)
 

@@ -171,7 +171,15 @@ class Dataset(torch.utils.data.Dataset):
             txt_features = txt_features.astype(np.float32)
             txt_features = self._thresholding(txt_features, self._threshold)
             if self._normalize_clip:
-                txt_features = txt_features / np.linalg.norm(txt_features)
+                # TODO: hard coded for now
+                if len(txt_features) == 512:
+                    txt_features = txt_features / np.linalg.norm(txt_features)
+                else:
+                    txt_features[:512] = txt_features[:512] / np.linalg.norm(txt_features[:512])
+                    txt_features[512:1024] = txt_features[512:1024] / np.linalg.norm(txt_features[512:1024])
+                    if len(txt_features) > 1024:
+                        txt_features[1024:] = txt_features[1024:] / np.linalg.norm(txt_features[1024:])
+
             return txt_features.copy()
         except:
             ipdb.set_trace()
@@ -361,7 +369,7 @@ class NsdClipDataset(Dataset):
         img_file = None,
         clip_img_file = None,   # pre-computed clip image vectors
         clip_cap_file = None,   # pre-computed clip caption vectors, OR pre-computed conditions
-        use_mapped  = False,    # Whether to use precomputed fmri-mapped vector, choose from None (will use gt txt clip vec), 'img', 'cap', 'add', 'cat', 'mix' (the latter three combines clip_img and clip_cap)
+        use_mapped  = False,    # Whether to use precomputed fmri-mapped vector, choose from None (will use gt txt clip vec), 'img', 'cap', 'add', 'cat', 'mix' (the latter three combines clip_img and clip_cap), 'all' (will concat img, cap, cap_gt)
         resolution = None,      # Ensure specific resolution, None = highest available.
         **super_kwargs,         # Additional arguments for the Dataset base class.
         ):
@@ -389,7 +397,7 @@ class NsdClipDataset(Dataset):
             os.path.join(data_dir, 'clip_features', 'fmri_nsd_images.json'))
         self.mapped_clip_cap_file = self.default(clip_cap_file,
             os.path.join(data_dir, 'clip_features', 'fmri_nsd_captions.json'))
-        allowed_ks = ['img', 'cap', 'add', 'cat', 'mix']
+        allowed_ks = ['img', 'cap', 'add', 'cat', 'mix', 'all']
         assert (use_mapped is None) or (use_mapped in allowed_ks), (
             f'Use_mapped must be None, or one of {allowed_ks}')
         self._use_mapped = use_mapped
@@ -450,7 +458,7 @@ class NsdClipDataset(Dataset):
     def _load_clip_txt_features(self, raw_idx):
         if self._use_mapped is None:
             with open(self.clip_cap_file, 'r') as f:
-                clip_features = json.load(f)[self._get_clip_id(raw_idx)]
+                c = json.load(f)[self._get_clip_id(raw_idx)]
         elif self._use_mapped == 'img':
             with open(self.mapped_clip_img_file, 'r') as f:
                 clip_features = json.load(f)[self._get_clip_id(raw_idx, use_nsdId=False)]
@@ -476,6 +484,11 @@ class NsdClipDataset(Dataset):
                 img_pos = np.random.choice(range(len(clip_features)), size=len(clip_features)//2, replace=False) # TODO: mix here or have a fixed idx in init?
                 for _img_pos in img_pos:
                     clip_features[_img_pos] = mapped_clip_img[_img_pos]
+            elif self._use_mapped == 'all':
+                with open(self.clip_cap_file, 'r') as f:
+                    clip_features = json.load(f)[self._get_clip_id(raw_idx)]
+                    clip_features = clip_features[np.random.randint(0, len(clip_features), ())]
+                clip_features = mapped_clip_img + mapped_clip_cap + clip_features
             clip_features = [clip_features]
 
         return clip_features

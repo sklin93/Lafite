@@ -21,8 +21,11 @@ class UserError(Exception):
 
 def setup_training_loop_kwargs(
     f_dim      = None,
+    f_dim2     = None,
     cond_vec   = None,
     use_fmri   = False,
+    structure  = 2,
+    enabled_forced_map = False,
     d_use_norm = None, # normalize the feature extracted by discriminator or not
     d_use_fts  = None, # discriminator extract semantic feature or not
     mixing_prob= None, # mixing probability of ground-truth and language-free generated pairs, mixing_prob=0 means only use ground-truth, mixing_prob=1. means using only pseudo pairs(language-free)
@@ -82,6 +85,11 @@ def setup_training_loop_kwargs(
         f_dim = 512
     assert isinstance(f_dim, int)
     args.f_dim = f_dim
+
+    if f_dim2 is None:
+        f_dim2 = 0
+    assert isinstance(f_dim2, int)
+    args.f_dim2 = f_dim2
 
     if ratio is None:
         ratio = 1.0
@@ -243,17 +251,17 @@ def setup_training_loop_kwargs(
         desc += f'-gpus{gpus:d}'
         spec.ref_gpus = gpus
         res = args.training_set_kwargs.resolution
-        spec.mb = 8 * gpus
-        # spec.mb = 16*gpus#max(min(gpus * min(4096 // res, 32), 64), gpus) # keep gpu memory consumption at bay
+        # spec.mb = 8 * gpus
+        spec.mb = 16 * gpus # max(min(gpus * min(4096 // res, 32), 64), gpus) # keep gpu memory consumption at bay
         spec.mbstd = min(spec.mb // gpus, 4) # other hyperparams behave more predictably if mbstd group size remains fixed
         spec.fmaps = 1 if res >= 512 else fmap
         spec.lrate = 0.002 if res >= 1024 else 0.0025
         spec.gamma = 0.0002 * (res ** 2) / spec.mb # heuristic formula
         spec.ema = spec.mb * 10 / 32
         
-#     args.M_kwargs = dnnlib.EasyDict(class_name='training.networks.ManiNetwork', z_dim=args.f_dim,  layer_features=args.f_dim, w_dim=512, num_layers=8)
-    args.G_kwargs = dnnlib.EasyDict(class_name='training.networks.Generator', z_dim=512, w_dim=512, m_layer_features=args.f_dim, m_num_layers=8, mapping_kwargs=dnnlib.EasyDict(), synthesis_kwargs=dnnlib.EasyDict())
-    args.D_kwargs = dnnlib.EasyDict(class_name='training.networks.Discriminator', use_norm=args.d_use_norm, use_fts=args.d_use_fts, block_kwargs=dnnlib.EasyDict(), mapping_kwargs=dnnlib.EasyDict(), epilogue_kwargs=dnnlib.EasyDict())
+    # args.M_kwargs = dnnlib.EasyDict(class_name='training.networks.ManiNetwork', z_dim=args.f_dim,  layer_features=args.f_dim, w_dim=512, num_layers=8)
+    args.G_kwargs = dnnlib.EasyDict(class_name='training.networks.Generator', z_dim=512, w_dim=512, m_layer_features=args.f_dim+args.f_dim2, m_num_layers=8, mapping_kwargs=dnnlib.EasyDict(), synthesis_kwargs=dnnlib.EasyDict(structure=args.structure))
+    args.D_kwargs = dnnlib.EasyDict(class_name='training.networks.Discriminator', use_norm=args.d_use_norm, use_fts=args.d_use_fts, block_kwargs=dnnlib.EasyDict(), mapping_kwargs=dnnlib.EasyDict(), epilogue_kwargs=dnnlib.EasyDict(structure=args.structure))
     args.G_kwargs.synthesis_kwargs.channel_base = args.D_kwargs.channel_base = int(spec.fmaps * 32768)
     args.G_kwargs.synthesis_kwargs.channel_max = args.D_kwargs.channel_max = 512
     args.G_kwargs.mapping_kwargs.num_layers = spec.map
@@ -261,8 +269,10 @@ def setup_training_loop_kwargs(
     args.G_kwargs.synthesis_kwargs.conv_clamp = args.D_kwargs.conv_clamp = 256 # clamp activations to avoid float16 overflow
     args.G_kwargs.synthesis_kwargs.change = change
     args.G_kwargs.synthesis_kwargs.f_dim = args.f_dim
+    args.G_kwargs.synthesis_kwargs.f_dim2 = args.f_dim2
     args.D_kwargs.epilogue_kwargs.mbstd_group_size = spec.mbstd
     args.D_kwargs.epilogue_kwargs.f_dim = args.f_dim
+    args.D_kwargs.epilogue_kwargs.f_dim2 = args.f_dim2
     
     args.G_opt_kwargs = dnnlib.EasyDict(class_name='torch.optim.Adam', lr=spec.lrate, betas=[0,0.99], eps=1e-8)
     args.D_opt_kwargs = dnnlib.EasyDict(class_name='torch.optim.Adam', lr=spec.lrate, betas=[0,0.99], eps=1e-8)
@@ -482,7 +492,10 @@ class CommaSeparatedList(click.ParamType):
 @click.pass_context
 
 @click.option('--f_dim', help='dimension of features', type=int, metavar='INT')
-@click.option('--change', help='change structure', type=int, metavar='INT')
+@click.option('--f_dim2', help='dimension of features', type=int, metavar='INT')
+@click.option('--change', help='change structure with threshold', type=int, metavar='INT')
+@click.option('--structure', help='change structure by numeric option', type=int, metavar='INT')
+@click.option('--enabled_forced_map', help='to copy the same weights to different pre_0 and pre_1 branches', type=bool, metavar='BOOL')
 @click.option('--map_num', help='layer number of mapping network', type=int, metavar='INT')
 @click.option('--d_use_norm', help='Input features into every layer of discriminator', type=bool, metavar='BOOL')
 @click.option('--d_use_fts', help='Use text feature in discriminator or not', type=bool, metavar='BOOL')
