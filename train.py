@@ -91,6 +91,16 @@ def setup_training_loop_kwargs(
     assert isinstance(f_dim2, int)
     args.f_dim2 = f_dim2
 
+    if structure is None:
+        structure = 2
+    assert isinstance(structure, int)
+    args.structure = structure
+
+    if enabled_forced_map is None:
+        enabled_forced_map = False
+    assert isinstance(enabled_forced_map, bool)
+    args.enabled_forced_map = enabled_forced_map
+
     if ratio is None:
         ratio = 1.0
     args.ratio = ratio
