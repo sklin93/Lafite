@@ -58,7 +58,8 @@ class Model(torch.nn.Module):
 #----------------------------------------------------------------------------
 
 class StyleGAN2Loss(Loss):
-    def __init__(self, device, G_mapping, G_synthesis, G_mani, D, augment_pipe=None, style_mixing_prob=0.9, r1_gamma=10, pl_batch_shrink=2, pl_decay=0.01, pl_weight=2):
+    def __init__(self, device, G_mapping, G_synthesis, G_mani, D, augment_pipe=None, style_mixing_prob=0.9,
+        r1_gamma=10, pl_batch_shrink=2, pl_decay=0.01, pl_weight=2, use_fmri=False, fmri_vec=None):
         super().__init__()
         self.device = device
         self.G_mapping = G_mapping
@@ -74,9 +75,13 @@ class StyleGAN2Loss(Loss):
         self.pl_mean = torch.zeros([], device=device)
         clip_model, _ = clip.load("ViT-B/32", device=device)  # Load CLIP model here
         self.clip_model = clip_model.eval()
-        self.mapper = Model(device)
-        self.mapper.load_state_dict(torch.load('./implicit.0.001.64.True.0.0.pth', map_location='cpu')) # path to the noise mapping network
-        self.mapper.to(device)
+        # self.mapper = Model(device)
+        # self.mapper.load_state_dict(torch.load('./implicit.0.001.64.True.0.0.pth', map_location='cpu')) # path to the noise mapping network
+        # self.mapper.to(device)
+        self.use_fmri = use_fmri
+        if use_fmri:
+            assert fmri_vec is not None, 'must provide mapper model if use fmri for end to end traing'
+            self.fmri_vec = fmri_vec
 
     def run_G(self, z, c, sync, txt_fts=None, ):
         with misc.ddp_sync(self.G_mapping, sync):
@@ -170,8 +175,11 @@ class StyleGAN2Loss(Loss):
         f_dim=512, f_dim2=512):
 
         assert phase in ['Gmain', 'Greg', 'Gboth', 'Dmain', 'Dreg', 'Dboth']
-        if fmri is not None:
-            pass # TODO: implement run_mapper to get txt_fts from mapper model
+        if self.use_fmri:
+            assert fmri is not None, 'fmri data must be provided if using fmri'
+            # get txt_fts from mapper model
+            txt_fts = self.fmri_vec(fmri)
+            # print(f'txt_fts through mapper: {txt_fts.shape}')
         assert txt_fts is not None
 
         do_Gmain = (phase in ['Gmain', 'Gboth'])
@@ -242,6 +250,7 @@ class StyleGAN2Loss(Loss):
                 return input_tensor
 
         txt_fts_all = gather_tensor(txt_fts_, gather)
+        # print('txt_fts_all:', txt_fts_all.shape)
         if structure == 4:
             txt_fts_2_all = gather_tensor(txt_fts_2, gather)
             if txt_fts_gt2.shape[-1] > 0:

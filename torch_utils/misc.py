@@ -257,3 +257,14 @@ def print_module_summary(module, inputs, max_nesting=3, skip_redundant=True):
     return outputs
 
 #----------------------------------------------------------------------------
+
+def load_trained_model(model_name, model, exact_load=True):
+    '''usage: load_trained_model(data_dir + model_name, model)'''
+    pretrained_dict = torch.load(model_name)
+    model_dict = model.state_dict()
+    if not exact_load:
+        pretrained_dict = {k: v for k, v in pretrained_dict.items() if k in
+                           model_dict and v.shape == model_dict[k].shape}
+    model_dict.update(pretrained_dict)
+    model.load_state_dict(model_dict)
+    print('Model weight loaded from {}.'.format(model_name))

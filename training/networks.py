@@ -1132,3 +1132,112 @@ class Discriminator(torch.nn.Module):
             return x, d_fts
 
 #----------------------------------------------------------------------------
+
+@persistence.persistent_class
+class ResBlock_1d_BN(torch.nn.Module):
+    ''' with batchnorm, wth bottleneck formulation, with last activation'''
+    def __init__(self, chan, first_kernel=3):
+        ''' - chan: a length 4 list'''
+        super().__init__()
+
+        if type(chan).__name__[:3] == 'int':
+            chan = [chan] * 4
+        assert len(chan) == 4, 'need to provide 4 channel numbers for 3 layers'
+
+        first_pad = (first_kernel - 1) // 2
+        self.net = torch.nn.Sequential(
+            torch.nn.Conv1d(chan[0], chan[1], first_kernel, padding=first_pad),
+            torch.nn.ReLU(inplace=True),
+            # torch.nn.BatchNorm1d(chan[1]),
+            torch.nn.Conv1d(chan[1], chan[2], 3, padding=1),
+            torch.nn.ReLU(inplace=True),
+            # torch.nn.BatchNorm1d(chan[2]),
+            torch.nn.Conv1d(chan[2], chan[3], 1),
+            # torch.nn.BatchNorm1d(chan[3]),
+        )
+        self.last_activation = torch.nn.ReLU(inplace=True)
+
+        self.upsample = None
+        if chan[0] != chan[3]:
+            self.upsample = torch.nn.Sequential(
+                torch.nn.Conv1d(chan[0], chan[3], 1),
+                # torch.nn.BatchNorm1d(chan[3])
+                )
+
+    def forward(self, x):
+        if self.upsample is None:
+            return self.last_activation(self.net(x) + x)
+        else:
+            return self.last_activation(self.net(x) + self.upsample(x))
+
+
+@persistence.persistent_class
+class ResBlock_1d_bottleneck(ResBlock_1d_BN):
+    def __init__(self, chan):
+        ResBlock_1d_BN.__init__(self, chan, first_kernel=1)
+
+
+@persistence.persistent_class
+class FmriVecMapper(torch.nn.Module):
+    def __init__(
+        self,
+        fmri_len = 15744,
+        f_dim = 512,
+        num_layers = 1,
+        num_resnet_blocks = 4,
+        hidden_dim = 64,
+        fc_hdim = 128,
+        channels = 1,
+        last_activation = False,
+    ):
+        super().__init__()
+        # assert log2(signal_len).is_integer(), 'image size must be a power of 2'
+        assert num_layers >= 1, 'number of layers must be greater than or equal to 1'
+
+        self.signal_len = fmri_len
+        self.num_tokens = f_dim
+        self.num_layers = num_layers
+
+        enc_chans = [hidden_dim] * num_layers
+        enc_chans = [channels, *enc_chans]
+        enc_chans_io, = map(lambda t: list(zip(t[:-1], t[1:])), (enc_chans,))
+
+        enc_layers = []
+        for (enc_in, enc_out) in enc_chans_io:
+            enc_layers.append(torch.nn.Sequential(torch.nn.Conv1d(enc_in, enc_out, 4, stride=2, padding=1), torch.nn.ReLU()))
+
+        d = enc_chans[-1]
+        # Using no-bottleneck resblock
+        for _ in range(num_resnet_blocks):
+            enc_layers.append(ResBlock_1d_BN(d))
+        enc_layers.append(torch.nn.Conv1d(d, self.num_tokens, 1))
+
+        # # Using bottleneck resblock
+        # if num_resnet_blocks > 0:
+        #     enc_layers.append(ResBlock_1d_bottleneck([d, d, d, 4 * d]))
+        # for _ in range(num_resnet_blocks - 1):
+        #     enc_layers.append(ResBlock_1d_bottleneck([4 * d, d, d, 4 * d]))
+        # enc_layers.append(torch.nn.Conv1d(4 * d, self.num_tokens, 1))
+
+        self.encoder = torch.nn.Sequential(*enc_layers)
+        fc = [
+              torch.nn.ReLU(),
+              torch.nn.Conv1d(self.signal_len // (2 ** num_layers), fc_hdim, 1),
+              torch.nn.ReLU(),
+              torch.nn.Conv1d(fc_hdim, 1, 1),
+              ]
+        if last_activation:
+            fc.append(torch.nn.Sigmoid())
+        self.fc = torch.nn.Sequential(*fc)
+
+    def forward(self, signal):
+        assert signal.shape[-1] == self.signal_len, f'input must have the correct image size {self.signal_len}'
+
+        signal = signal.view(-1, 1, self.signal_len)
+        signal = self.encoder(signal)
+        signal = signal.transpose(1,2)
+        y_pred = self.fc(signal)[:, 0, :]
+
+        return y_pred
+
+#----------------------------------------------------------------------------

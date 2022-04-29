@@ -23,9 +23,10 @@ def setup_training_loop_kwargs(
     f_dim      = None,
     f_dim2     = None,
     cond_vec   = None,
-    use_fmri   = False,
+    use_fmri   = False, # if True, carry out end to end training that trains both mapper and GAN
+    fmri_len   = 15744,
     structure  = 2,
-    enabled_forced_map = False,
+    enabled_forced_map = False, # whether to copy the same weights to different pre_0 and pre_1 branches or not
     d_use_norm = None, # normalize the feature extracted by discriminator or not
     d_use_fts  = None, # discriminator extract semantic feature or not
     mixing_prob= None, # mixing probability of ground-truth and language-free generated pairs, mixing_prob=0 means only use ground-truth, mixing_prob=1. means using only pseudo pairs(language-free)
@@ -95,6 +96,15 @@ def setup_training_loop_kwargs(
         structure = 2
     assert isinstance(structure, int)
     args.structure = structure
+
+    if use_fmri is None:
+        use_fmri = False
+    assert isinstance(use_fmri, bool)
+    args.use_fmri = use_fmri
+
+    if fmri_len is None:
+        fmri_len = 15744
+    assert isinstance(fmri_len, int)
 
     if enabled_forced_map is None:
         enabled_forced_map = False
@@ -197,8 +207,8 @@ def setup_training_loop_kwargs(
         test_data = data
     # args.training_set_kwargs = dnnlib.EasyDict(class_name='training.dataset.ImageFolderDataset', path=data, use_labels=True, max_size=None, xflip=False, use_clip=True, ratio=args.ratio)
     # args.testing_set_kwargs = dnnlib.EasyDict(class_name='training.dataset.ImageFolderDataset', path=test_data, use_labels=True, max_size=None, xflip=False, use_clip=True, ratio=1.0)
-    args.training_set_kwargs = dnnlib.EasyDict(class_name='training.dataset.NsdClipDataset', path=data, use_mapped=cond_vec, use_fmri=use_fmri, fmri_pad=15744, use_clip=True, threshold=1.5, normalize_clip=True, use_labels=True, max_size=None, xflip=False, ratio=args.ratio)
-    args.testing_set_kwargs = dnnlib.EasyDict(class_name='training.dataset.NsdClipDataset', path=test_data, use_mapped=cond_vec, use_fmri=use_fmri, fmri_pad=15744, use_clip=True, threshold=1.5, normalize_clip=True, use_labels=True, max_size=None, xflip=False, ratio=1.0)
+    args.training_set_kwargs = dnnlib.EasyDict(class_name='training.dataset.NsdClipDataset', path=data, use_mapped=cond_vec, use_fmri=args.use_fmri, fmri_pad=15744, use_clip=True, threshold=1.5, normalize_clip=True, use_labels=True, max_size=None, xflip=False, ratio=args.ratio)
+    args.testing_set_kwargs = dnnlib.EasyDict(class_name='training.dataset.NsdClipDataset', path=test_data, use_mapped=cond_vec, use_fmri=args.use_fmri, fmri_pad=15744, use_clip=True, threshold=1.5, normalize_clip=True, use_labels=True, max_size=None, xflip=False, ratio=1.0)
 
     args.data_loader_kwargs = dnnlib.EasyDict(pin_memory=False, num_workers=1, prefetch_factor=2)
     try:
@@ -251,8 +261,8 @@ def setup_training_loop_kwargs(
     assert isinstance(cfg, str)
     desc += f'-{cfg}-lam{lam:g}-temp{temp:g}-map_num{map_num:g}'
 
-    cfg_specs = {
-        'auto':      dict(ref_gpus=-1, kimg=25000,  mb=-1, mbstd=-1, fmaps=-1,  lrate=-1,     gamma=1.,   ema=-1,  ramp=0.05, map=map_num), # Populated dynamically based on resolution and GPU count.
+    cfg_specs = {# Populated dynamically based on resolution and GPU count.
+        'auto': dict(ref_gpus=-1, kimg=25000, mb=-1, mbstd=-1, fmaps=-1, lrate=-1, gamma=1., ema=-1, ramp=0.05, map=map_num),
     }
 
     assert cfg in cfg_specs
@@ -270,8 +280,15 @@ def setup_training_loop_kwargs(
         spec.ema = spec.mb * 10 / 32
         
     # args.M_kwargs = dnnlib.EasyDict(class_name='training.networks.ManiNetwork', z_dim=args.f_dim,  layer_features=args.f_dim, w_dim=512, num_layers=8)
-    args.G_kwargs = dnnlib.EasyDict(class_name='training.networks.Generator', z_dim=512, w_dim=512, m_layer_features=args.f_dim+args.f_dim2, m_num_layers=8, mapping_kwargs=dnnlib.EasyDict(), synthesis_kwargs=dnnlib.EasyDict(structure=args.structure))
-    args.D_kwargs = dnnlib.EasyDict(class_name='training.networks.Discriminator', use_norm=args.d_use_norm, use_fts=args.d_use_fts, block_kwargs=dnnlib.EasyDict(), mapping_kwargs=dnnlib.EasyDict(), epilogue_kwargs=dnnlib.EasyDict(structure=args.structure))
+    args.G_kwargs = dnnlib.EasyDict(class_name='training.networks.Generator', z_dim=512, w_dim=512,
+        m_layer_features=args.f_dim+args.f_dim2, m_num_layers=8, mapping_kwargs=dnnlib.EasyDict(),
+        synthesis_kwargs=dnnlib.EasyDict(structure=args.structure))
+    args.D_kwargs = dnnlib.EasyDict(class_name='training.networks.Discriminator', use_norm=args.d_use_norm,
+        use_fts=args.d_use_fts, block_kwargs=dnnlib.EasyDict(), mapping_kwargs=dnnlib.EasyDict(),
+        epilogue_kwargs=dnnlib.EasyDict(structure=args.structure))
+    if args.use_fmri:
+        args.mapper_kwargs = dnnlib.EasyDict(class_name='training.networks.FmriVecMapper', fmri_len=fmri_len, f_dim=args.f_dim)
+
     args.G_kwargs.synthesis_kwargs.channel_base = args.D_kwargs.channel_base = int(spec.fmaps * 32768)
     args.G_kwargs.synthesis_kwargs.channel_max = args.D_kwargs.channel_max = 512
     args.G_kwargs.mapping_kwargs.num_layers = spec.map
@@ -286,7 +303,7 @@ def setup_training_loop_kwargs(
     
     args.G_opt_kwargs = dnnlib.EasyDict(class_name='torch.optim.Adam', lr=spec.lrate, betas=[0,0.99], eps=1e-8)
     args.D_opt_kwargs = dnnlib.EasyDict(class_name='torch.optim.Adam', lr=spec.lrate, betas=[0,0.99], eps=1e-8)
-    args.loss_kwargs = dnnlib.EasyDict(class_name='training.loss.StyleGAN2Loss', r1_gamma=spec.gamma)
+    args.loss_kwargs = dnnlib.EasyDict(class_name='training.loss.StyleGAN2Loss', r1_gamma=spec.gamma, use_fmri=args.use_fmri)
 
     args.total_kimg = spec.kimg
     args.batch_size = spec.mb
@@ -503,6 +520,7 @@ class CommaSeparatedList(click.ParamType):
 
 @click.option('--f_dim', help='dimension of features', type=int, metavar='INT')
 @click.option('--f_dim2', help='dimension of features', type=int, metavar='INT')
+@click.option('--fmri_len', help='length of fmri vector', type=int, metavar='INT')
 @click.option('--change', help='change structure with threshold', type=int, metavar='INT')
 @click.option('--structure', help='change structure by numeric option', type=int, metavar='INT')
 @click.option('--enabled_forced_map', help='to copy the same weights to different pre_0 and pre_1 branches', type=bool, metavar='BOOL')

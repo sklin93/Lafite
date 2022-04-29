@@ -18,6 +18,7 @@ from torch_utils.ops import grid_sample_gradfix
 import sys
 sys.path.append('/home/sikun/bold5k/CLIP')
 import clip
+del sys.path[-1]
 import torch.nn.functional as F
 import torchvision.transforms as T
 import legacy
@@ -25,7 +26,7 @@ from metrics import metric_main
 
 #----------------------------------------------------------------------------
 
-def setup_snapshot_image_grid(training_set, random_seed=0):
+def setup_snapshot_image_grid(training_set, random_seed=0, use_fmri=False):
     rnd = np.random.RandomState(random_seed)
     gw = np.clip(7680 // training_set.image_shape[2], 7, 8)
     gh = np.clip(4320 // training_set.image_shape[1], 4, 8)
@@ -59,7 +60,10 @@ def setup_snapshot_image_grid(training_set, random_seed=0):
             label_groups[label] = [indices[(i + gw) % len(indices)] for i in range(len(indices))]
 
     # Load data.
-    images, labels, _, _ = zip(*[training_set[i] for i in grid_indices])
+    if use_fmri:
+        images, labels, _, _, _ = zip(*[training_set[i] for i in grid_indices])
+    else:
+        images, labels, _, _ = zip(*[training_set[i] for i in grid_indices])
     return (gw, gh), np.stack(images), np.stack(labels)
 
 #----------------------------------------------------------------------------
@@ -91,7 +95,8 @@ def training_loop(
     data_loader_kwargs      = {},       # Options for torch.utils.data.DataLoader.
     G_kwargs                = {},       # Options for generator network.
     D_kwargs                = {},       # Options for discriminator network.
-#     M_kwargs                = {},
+    mapper_kwargs           = {},
+    # M_kwargs                = {},
     G_opt_kwargs            = {},       # Options for generator optimizer.
     D_opt_kwargs            = {},       # Options for discriminator optimizer.
     augment_kwargs          = None,     # Options for augmentation pipeline. None = disable.
@@ -169,13 +174,21 @@ def training_loop(
     G = dnnlib.util.construct_class_by_name(**G_kwargs, **common_kwargs).train().requires_grad_(False).to(device) # subclass of torch.nn.Module
     D = dnnlib.util.construct_class_by_name(**D_kwargs, **common_kwargs).train().requires_grad_(False).to(device) # subclass of torch.nn.Module
     G_ema = copy.deepcopy(G).eval()
+    if use_fmri:
+        fmri_vec = dnnlib.util.construct_class_by_name(**mapper_kwargs).train().requires_grad_(False).to(device) # subclass of torch.nn.Module
+        # TODO: first time only, remove afterwards
+        # misc.load_trained_model('/home/sikun/bold5k/data/weights/fmri_clipcapnorm_mse_cos_thr.pth', fmri_vec)
+        fmri_vec.to(torch.double)
 
     # Resume from existing pickle.
     if (resume_pkl is not None) and (rank == 0):
         print(f'Resuming from "{resume_pkl}"')
         with dnnlib.util.open_url(resume_pkl) as f:
             resume_data = legacy.load_network_pkl(f)
-        for name, module in [('G', G), ('D', D), ('G_ema', G_ema)]:
+        nm_pairs = [('G', G), ('D', D), ('G_ema', G_ema)]
+        if use_fmri:
+            nm_pairs.append(('fmri_vec', fmri_vec))
+        for name, module in nm_pairs:
             print(name, module)
             forced_map = {}
             if enabled_forced_map: # to copy the same weights to different pre_0 and pre_1 branches
@@ -190,7 +203,9 @@ def training_loop(
                                 cur_v = f'synthesis.b{i}.{j}.pre_{k}.{v}'
                                 # print(cur_k, ',', cur_v)
                                 forced_map[cur_k] = cur_v
-            misc.copy_params_and_buffers(resume_data[name], module, require_all=False, forced_map=forced_map)
+            # first time no existing mapper model
+            if name in resume_data:
+                misc.copy_params_and_buffers(resume_data[name], module, require_all=False, forced_map=forced_map)
 
     # Print network summary tables.
     if rank == 0:
@@ -215,7 +230,10 @@ def training_loop(
     if rank == 0:
         print(f'Distributing across {num_gpus} GPUs...')
     ddp_modules = dict()
-    for name, module in [('G_mapping', G.mapping), ('G_synthesis', G.synthesis), ('G_mani', G.mani), ('D', D), (None, G_ema), ('augment_pipe', augment_pipe)]:
+    nm_pairs = [('G_mapping', G.mapping), ('G_synthesis', G.synthesis), ('G_mani', G.mani), ('D', D), (None, G_ema), ('augment_pipe', augment_pipe)]
+    if use_fmri:
+        nm_pairs.append(('fmri_vec', fmri_vec))
+    for name, module in nm_pairs:
         if (num_gpus > 1) and (module is not None) and len(list(module.parameters())) != 0:
             module.requires_grad_(True)
             module = torch.nn.parallel.DistributedDataParallel(module, device_ids=[device], broadcast_buffers=False)
@@ -254,23 +272,23 @@ def training_loop(
     grid_c = None
     if rank == 0:
         print('Exporting sample images...')
-        grid_size, images, labels = setup_snapshot_image_grid(training_set=training_set)
+        grid_size, images, labels = setup_snapshot_image_grid(training_set=training_set, use_fmri=use_fmri)
         save_image_grid(images, os.path.join(run_dir, 'reals.png'), drange=[0,255], grid_size=grid_size)
         grid_z = torch.randn([labels.shape[0], G.z_dim], device=device).split(batch_gpu)
         grid_c = torch.from_numpy(labels).to(device).split(batch_gpu)
-       
+
         images = torch.cat([G_ema(z=z, c=c, noise_mode='const').cpu() for z, c in zip(grid_z, grid_c)]).numpy()
-#         images = torch.cat([G_ema(z=z, c=c).cpu() for z, c in zip(grid_z, grid_c)]).numpy()
+        # images = torch.cat([G_ema(z=z, c=c).cpu() for z, c in zip(grid_z, grid_c)]).numpy()
         save_image_grid(images, os.path.join(run_dir, 'fakes_init.png'), drange=[-1,1], grid_size=grid_size)
-        
-#         text = ['This is a white and grey bird with black wings and black stripe by its eyes', 
-#                 'A bird with a brown and black wings, red crown and throat and the bill is short pointed',
-#                 'This bird has a yellow throat, belly, abdomen and sides with lots of brown streaks on them',
-#                 'This bird has a white belly and breast, with a blue crown and nape']
-        
-#         text = ['this is a sneaker shoes, with red lace up closure',
-#                'a women, high heel shoes made of brown leather',
-#                'a slipper for men']
+
+        # text = ['This is a white and grey bird with black wings and black stripe by its eyes', 
+        #         'A bird with a brown and black wings, red crown and throat and the bill is short pointed',
+        #         'This bird has a yellow throat, belly, abdomen and sides with lots of brown streaks on them',
+        #         'This bird has a white belly and breast, with a blue crown and nape']
+
+        # text = ['this is a sneaker shoes, with red lace up closure',
+        #        'a women, high heel shoes made of brown leather',
+        #        'a slipper for men']
 
         text = ['A living area with a television and a table',
                'A child eating a birthday cake near some balloons',
@@ -278,12 +296,11 @@ def training_loop(
                'A group of skiers are preparing to ski down a mountain',
                'A school bus in the forest',
                'A green train is coming down the tracks']
-    
-#         text = ['A man wearing glasses with beard, he has brown hair',
-#                'A woman with long blonde hair and earrings, she is smiling',
-#                'A man has blue hair and no beard']
-    
-    
+
+        # text = ['A man wearing glasses with beard, he has brown hair',
+        #        'A woman with long blonde hair and earrings, she is smiling',
+        #        'A man has blue hair and no beard']
+
         with torch.no_grad():
             clip_model, _ = clip.load("ViT-B/32", device=device)  # Load CLIP model here
             previous_w_list = [None]*len(grid_c)
@@ -298,13 +315,13 @@ def training_loop(
                 f_txt_ = f_txt.split(batch_gpu)
                 txt_fts_list.append(f_txt_)
                 img_list = []
-#                 current_w_list = []
+                # current_w_list = []
                 for f, z, c, w in zip(f_txt_, grid_z, grid_c, previous_w_list):
                     img_, w_ = G_ema(z=z, c=c, fts=f, return_w=True, w=w, noise_mode='const')
-#                     img_, w_ = G_ema(z=z, c=c, fts=f, return_w=True, w=w, )
+                    # img_, w_ = G_ema(z=z, c=c, fts=f, return_w=True, w=w, )
                     img_list.append(img_)
-#                     current_w_list.append(w_)
-#                 previous_w_list = current_w_list
+                    # current_w_list.append(w_)
+                # previous_w_list = current_w_list
                 print([img.size() for img in img_list])
                 images = torch.cat([img.cpu() for img in img_list]).numpy()            
                 save_image_grid(images, os.path.join(run_dir, 'fakes_init_txt_step_%i.png'%step), drange=[-1,1], grid_size=grid_size)   
@@ -343,7 +360,7 @@ def training_loop(
         with torch.autograd.profiler.record_function('data_fetch'):
             if use_fmri:
                 phase_real_img, phase_real_c, phase_img_features, phase_txt_features, phase_fmri = next(training_set_iterator)
-                ipdb.set_trace() #TODO (e2e): dealing / scaling fmri? Put onto different GPUs?
+                phase_fmri = phase_fmri.to(device).split(batch_gpu)
             else:
                 phase_real_img, phase_real_c, phase_img_features, phase_txt_features = next(training_set_iterator)
                 # print(phase_real_img.shape, phase_img_features.shape, phase_txt_features.shape) # torch.Size([b, 3, 256, 256]) torch.Size([b, 512]) torch.Size([b, 512])
@@ -376,14 +393,13 @@ def training_loop(
 
             # Accumulate gradients over multiple rounds.
             if use_fmri:
-                ipdb.set_trace() # TODO: change accumulate gradients in the loss file, add additional fmri arg
                 for round_idx, (real_img, real_c, gen_z, gen_c, real_img_feature, real_txt_feature, fmri) in enumerate(zip(phase_real_img, phase_real_c, phase_gen_z, phase_gen_c, phase_img_features, phase_txt_features, phase_fmri)):
                     sync = (round_idx == batch_size // (batch_gpu * num_gpus) - 1)
                     gain = phase.interval
                     loss.accumulate_gradients(phase=phase.name, real_img=real_img, real_c=real_c, gen_z=gen_z, gen_c=gen_c,
-                        sync=sync, gain=gain, img_fts=real_img_feature, txt_fts=real_txt_feature,mixing_prob=mixing_prob,
-                        temp=temp, lam=lam,gather=gather, d_use_fts=d_use_fts, itd=itd, itc=itc, iid=iid, iic=iic,
-                        fmri=fmri, structure=structure, f_dim=f_dim, f_dim2=f_dim2)
+                        sync=sync, gain=gain, img_fts=real_img_feature, lam=lam, temp=temp, gather=gather, d_use_fts=d_use_fts,
+                        itd=itd, itc=itc, iid=iid, iic=iic, mixing_prob=mixing_prob, txt_fts=None, fmri=fmri,
+                        structure=structure, f_dim=f_dim, f_dim2=f_dim2)
             else:
                 for round_idx, (real_img, real_c, gen_z, gen_c, real_img_feature, real_txt_feature) in enumerate(zip(phase_real_img, phase_real_c, phase_gen_z, phase_gen_c, phase_img_features, phase_txt_features)):
                     # print(real_img.shape, real_c.shape, gen_z.shape, gen_c, real_img_feature.shape, real_txt_feature.shape)
@@ -395,8 +411,8 @@ def training_loop(
                     sync = (round_idx == batch_size // (batch_gpu * num_gpus) - 1)
                     gain = phase.interval
                     loss.accumulate_gradients(phase=phase.name, real_img=real_img, real_c=real_c, gen_z=gen_z, gen_c=gen_c,
-                        sync=sync, gain=gain, img_fts=real_img_feature, txt_fts=real_txt_feature, mixing_prob=mixing_prob,
-                        temp=temp, lam=lam, gather=gather, d_use_fts=d_use_fts, itd=itd, itc=itc, iid=iid, iic=iic,
+                        sync=sync, gain=gain, img_fts=real_img_feature, lam=lam, temp=temp, gather=gather, d_use_fts=d_use_fts,
+                        itd=itd, itc=itc, iid=iid, iic=iic, mixing_prob=mixing_prob, txt_fts=real_txt_feature,
                         structure=structure, f_dim=f_dim, f_dim2=f_dim2)
 
             # Update weights.
@@ -463,17 +479,17 @@ def training_loop(
         # Save image snapshot.
         if (rank == 0) and (image_snapshot_ticks is not None) and (done or cur_tick % image_snapshot_ticks == 0):
             images = torch.cat([G_ema(z=z, c=c, noise_mode='const').cpu() for z, c in zip(grid_z, grid_c)]).numpy()
-#             images = torch.cat([G_ema(z=z, c=c, ).cpu() for z, c in zip(grid_z, grid_c)]).numpy()
+            # images = torch.cat([G_ema(z=z, c=c, ).cpu() for z, c in zip(grid_z, grid_c)]).numpy()
 
             save_image_grid(images, os.path.join(run_dir, f'fakes{cur_nimg//1000:06d}.png'), drange=[-1,1], grid_size=grid_size)
-            
+
             for step in range(len(text)):
                 img_list = []            
                 style_list = []
                 w_list = []
                 for f, z, c in zip(txt_fts_list[step], grid_z, grid_c):
                     img_, w_, style= G_ema(z=z, c=c, fts=f, return_w=True, return_styles=True, noise_mode='const')
-#                     img_, w_, style= G_ema(z=z, c=c, fts=f, return_w=True, return_styles=True)
+                    # img_, w_, style= G_ema(z=z, c=c, fts=f, return_w=True, return_styles=True)
                     img_list.append(img_)
                     style_list.append(style)
                     w_list.append(w_)
@@ -482,7 +498,7 @@ def training_loop(
                 img_list = []
                 for f, z, c, s, w in zip(txt_fts_list[step], grid_z, grid_c, style_list, w_list):
                     w = w.normal_()
-#                     img_ = G_ema.synthesis(ws=w, fts=f, styles=s, ) # test whether we can construct using style
+                    # img_ = G_ema.synthesis(ws=w, fts=f, styles=s, ) # test whether we can construct using style
                     img_ = G_ema.synthesis(ws=w, fts=f, styles=s, noise_mode='const') # test whether we can construct using style
                     img_list.append(img_)
                 images = torch.cat([img.cpu() for img in img_list]).numpy()            
@@ -516,7 +532,10 @@ def training_loop(
                 loss_kwargs = loss_kwargs,
             )
 
-            for name, module in [('G', G), ('D', D), ('G_ema', G_ema), ('augment_pipe', augment_pipe)]:
+            nm_pairs = [('G', G), ('D', D), ('G_ema', G_ema), ('augment_pipe', augment_pipe)]
+            if use_fmri:
+                nm_pairs.append(('fmri_vec', fmri_vec))
+            for name, module in nm_pairs:
                 if module is not None:
                     if num_gpus > 1:
                         misc.check_ddp_consistency(module, ignore_regex=r'.*\.w_avg')
@@ -532,15 +551,17 @@ def training_loop(
         if (snapshot_data is not None) and (len(metrics) > 0):
             if rank == 0:
                 print('Evaluating metrics...')
-#             for metric in metrics:
-#                 result_dict = metric_main.calc_metric(metric=metric, G=snapshot_data['G_ema'], D = snapshot_data['D'],
-#                     dataset_kwargs=training_set_kwargs, testset_kwargs=testing_set_kwargs, num_gpus=num_gpus, rank=rank, device=device, txt_recon=False, img_recon=True)
-#                 if rank == 0:
-#                     metric_main.report_metric(result_dict, run_dir=run_dir, snapshot_pkl=snapshot_pkl)
-#                 stats_metrics.update(result_dict.results)
+            # for metric in metrics:
+            
             for metric in metrics:
+                fmri_vec_eval = snapshot_data['fmri_vec'] if use_fmri else None
                 result_dict = metric_main.calc_metric(metric=metric, G=snapshot_data['G_ema'], D=snapshot_data['D'],
-                    dataset_kwargs=training_set_kwargs, testset_kwargs=testing_set_kwargs, num_gpus=num_gpus, rank=rank, device=device, txt_recon=True, img_recon=False, metric_only_test=metric_only_test)
+                    dataset_kwargs=training_set_kwargs, testset_kwargs=testing_set_kwargs, num_gpus=num_gpus, rank=rank,
+                    device=device, txt_recon=True, img_recon=False, metric_only_test=metric_only_test, use_fmri=use_fmri,
+                    fmri_vec=fmri_vec_eval)
+                # result_dict = metric_main.calc_metric(metric=metric, G=snapshot_data['G_ema'], D = snapshot_data['D'],
+                #     dataset_kwargs=training_set_kwargs, testset_kwargs=testing_set_kwargs, num_gpus=num_gpus, rank=rank,
+                #     device=device, txt_recon=False, img_recon=True)
                 if rank == 0:
                     metric_main.report_metric(result_dict, run_dir=run_dir, snapshot_pkl=snapshot_pkl)
                 stats_metrics.update(result_dict.results)

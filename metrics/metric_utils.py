@@ -11,6 +11,7 @@ import dnnlib
 import sys
 sys.path.append('/home/sikun/bold5k/CLIP')
 import clip
+del sys.path[-1]
 import torchvision.transforms as T
 # import matplotlib.pyplot as plt
 #----------------------------------------------------------------------------
@@ -28,7 +29,9 @@ import torchvision.transforms as T
 #         self.cache          = cache
 
 class MetricOptions:
-    def __init__(self, G_ema=None, G=None, D=None, M=None, G_kwargs={}, D_kwargs ={}, M_kwargs ={}, dataset_kwargs={}, testset_kwargs={}, num_gpus=1, rank=0, device=None, progress=None, cache=True, txt_recon=True, img_recon=False, metric_only_test=False):
+    def __init__(self, G_ema=None, G=None, D=None, M=None, G_kwargs={}, D_kwargs ={}, M_kwargs ={}, dataset_kwargs={},
+        testset_kwargs={}, num_gpus=1, rank=0, device=None, progress=None, cache=True, txt_recon=True, img_recon=False,
+        metric_only_test=False, use_fmri=False, fmri_vec=None):
         assert 0 <= rank < num_gpus
         self.G              = G
 #         self.G_ema          = G_ema
@@ -50,6 +53,8 @@ class MetricOptions:
         self.txt_recon = txt_recon
         self.img_recon = img_recon
         self.metric_only_test = metric_only_test
+        self.use_fmri = use_fmri
+        self.fmri_vec = fmri_vec
 
 #----------------------------------------------------------------------------
 
@@ -241,13 +246,14 @@ def compute_feature_stats_for_dataset(opts, detector_url, detector_kwargs, rel_l
 
     # Main loop.
     item_subset = [(i * opts.num_gpus + opts.rank) % num_items for i in range((num_items - 1) // opts.num_gpus + 1)]
-    for images, _labels, img_fts, txt_fts in torch.utils.data.DataLoader(dataset=dataset, sampler=item_subset, batch_size=batch_size, **data_loader_kwargs):
+    for _cur in torch.utils.data.DataLoader(dataset=dataset, sampler=item_subset, batch_size=batch_size, **data_loader_kwargs):
+        images = _cur[0]
         if images.shape[1] == 1:
             images = images.repeat([1, 3, 1, 1])
         features = detector(images.to(opts.device), **detector_kwargs)
         stats.append_torch(features, num_gpus=opts.num_gpus, rank=opts.rank)
         progress.update(stats.num_items)
-        del images, _labels, img_fts, txt_fts
+        del _cur
 
     # Save to cache.
     if cache_file is not None and opts.rank == 0:
@@ -313,18 +319,27 @@ def compute_feature_stats_for_generator(opts, detector_url, detector_kwargs, rel
         dataloader_iterator = iter(torch.utils.data.DataLoader(dataset=dataset, sampler=item_subset, batch_size=batch_size, **data_loader_kwargs))
         while not stats.is_full():
             try:
-                images, _labels, img_fts, txt_fts = next(dataloader_iterator)
+                if opts.use_fmri:
+                    images, _labels, img_fts, _, fmri = next(dataloader_iterator)
+                else:
+                    images, _labels, img_fts, txt_fts = next(dataloader_iterator)
                 # print(images.shape, _labels, img_fts.shape, txt_fts.shape) # torch.Size([16, 3, 256, 256]) tensor([], size=(16, 0)) torch.Size([16, 512]) torch.Size([16, 512])
                 # plt.plot(img_fts[0].cpu().numpy())
                 # plt.show()
                 # plt.plot(txt_fts[0].cpu().numpy())
                 # plt.show()
-            except:
+            except: # ?????
                 dataloader_iterator = iter(torch.utils.data.DataLoader(dataset=dataset, sampler=item_subset, batch_size=batch_size, **data_loader_kwargs))
-                images, _labels, img_fts, txt_fts = next(dataloader_iterator)
+                if opts.use_fmri:
+                    images, _labels, img_fts, _, fmri = next(dataloader_iterator)
+                else:
+                    images, _labels, img_fts, txt_fts = next(dataloader_iterator)
                 print('entered except')
 
             with torch.no_grad():
+                if opts.use_fmri:
+                    fmri_vec = copy.deepcopy(opts.fmri_vec).eval().requires_grad_(False).to(opts.device)
+                    txt_fts = fmri_vec(fmri.to(opts.device))
                 clip_txt_features = txt_fts/txt_fts.norm(dim=-1, keepdim=True)#.view((batch_size, -1))
                 z = torch.randn([txt_fts.size()[0], G.z_dim], device=opts.device)
                 imgs = G(z=z, c=_labels.to(opts.device), fts=clip_txt_features.to(opts.device))
@@ -336,6 +351,8 @@ def compute_feature_stats_for_generator(opts, detector_url, detector_kwargs, rel
             stats.append_torch(features, num_gpus=opts.num_gpus, rank=opts.rank)
             progress.update(stats.num_items)
             del images, _labels, img_fts, txt_fts
+            if opts.use_fmri:
+                del fmri
         return stats
 
     else:
