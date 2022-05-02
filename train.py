@@ -150,9 +150,7 @@ def setup_training_loop_kwargs(
     if iic is None:
         iic = 0.
     args.iic = iic
-    
-    
-    
+
     if change is None:
         change = 256
     
@@ -288,6 +286,9 @@ def setup_training_loop_kwargs(
         epilogue_kwargs=dnnlib.EasyDict(structure=args.structure))
     if args.use_fmri:
         args.mapper_kwargs = dnnlib.EasyDict(class_name='training.networks.FmriVecMapper', fmri_len=fmri_len, f_dim=args.f_dim)
+        if args.structure == 4:
+            # used for resnet vec, hardcoded params
+            args.mapper2_kwargs = dnnlib.EasyDict(class_name='training.networks.FmriVecMapper', fmri_len=fmri_len, f_dim=args.f_dim2, num_layers=2, fc_hdim=256, last_activation=True)
 
     args.G_kwargs.synthesis_kwargs.channel_base = args.D_kwargs.channel_base = int(spec.fmaps * 32768)
     args.G_kwargs.synthesis_kwargs.channel_max = args.D_kwargs.channel_max = 512

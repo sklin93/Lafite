@@ -422,8 +422,9 @@ class SynthesisLayer(torch.nn.Module):  # <-- added (change)
         elif self.structure == 4:
             self.pre_0 = FullyConnectedLayer(f_dim, _f_dim, activation='lrelu', lr_multiplier=0.01) # pre process text features  
             self.pre_1 = FullyConnectedLayer(_f_dim, 512, activation='lrelu', lr_multiplier=0.01)
-            self.pre_01 = FullyConnectedLayer(f_dim2, _f_dim, activation='lrelu', lr_multiplier=0.01) # pre process text features  
-            self.pre_11 = FullyConnectedLayer(_f_dim, 512, activation='lrelu', lr_multiplier=0.01)
+            _f_dim2 = (f_dim2 + 512)//2
+            self.pre_01 = FullyConnectedLayer(f_dim2, _f_dim2, activation='lrelu', lr_multiplier=0.01) # pre process text features
+            self.pre_11 = FullyConnectedLayer(_f_dim2, 512, activation='lrelu', lr_multiplier=0.01)
             self.affine_1 = FullyConnectedLayer(w_dim+512*2, in_channels, bias_init=1)# f([w, txt])
             self.f_dim = f_dim
             self.f_dim2 = f_dim2
@@ -537,8 +538,9 @@ class ToRGBLayer(torch.nn.Module):
         elif self.structure == 4:
             self.pre_0 = FullyConnectedLayer(f_dim, _f_dim, activation='lrelu', lr_multiplier=0.01) # pre process text features  
             self.pre_1 = FullyConnectedLayer(_f_dim, 512, activation='lrelu', lr_multiplier=0.01)
-            self.pre_01 = FullyConnectedLayer(f_dim2, _f_dim, activation='lrelu', lr_multiplier=0.01) # pre process text features  
-            self.pre_11 = FullyConnectedLayer(_f_dim, 512, activation='lrelu', lr_multiplier=0.01)
+            _f_dim2 = (f_dim2 + 512)//2
+            self.pre_01 = FullyConnectedLayer(f_dim2, _f_dim2, activation='lrelu', lr_multiplier=0.01) # pre process text features  
+            self.pre_11 = FullyConnectedLayer(_f_dim2, 512, activation='lrelu', lr_multiplier=0.01)
             self.affine_1 = FullyConnectedLayer(w_dim+512*2, in_channels, bias_init=1)# f([w, txt])
             self.f_dim = f_dim
             self.f_dim2 = f_dim2
@@ -615,9 +617,6 @@ class SynthesisBlock(torch.nn.Module):
         conv_clamp          = None,         # Clamp the output of convolution layers to +-X, None = disable clamping.
         use_fp16            = False,        # Use FP16 for this block?
         fp16_channels_last  = False,        # Use channels-last memory format with FP16?
-        structure = 0,
-        f_dim = 512,
-        f_dim2 = 512,
         **layer_kwargs,                     # Arguments for SynthesisLayer.
     ):
         assert architecture in ['orig', 'skip', 'resnet']
@@ -639,17 +638,17 @@ class SynthesisBlock(torch.nn.Module):
 
         if in_channels != 0:
             self.conv0 = SynthesisLayer(in_channels, out_channels, w_dim=w_dim, resolution=resolution, up=2,
-                resample_filter=resample_filter, conv_clamp=conv_clamp, channels_last=self.channels_last,
-                structure=structure, f_dim=f_dim, f_dim2=f_dim2, **layer_kwargs)
+                resample_filter=resample_filter, conv_clamp=conv_clamp, channels_last=self.channels_last, **layer_kwargs)
             self.num_conv += 1
 
         self.conv1 = SynthesisLayer(out_channels, out_channels, w_dim=w_dim, resolution=resolution,
-            conv_clamp=conv_clamp, channels_last=self.channels_last, structure=structure, f_dim=f_dim, **layer_kwargs)
+            conv_clamp=conv_clamp, channels_last=self.channels_last, **layer_kwargs)
         self.num_conv += 1
 
         if is_last or architecture == 'skip':
             self.torgb = ToRGBLayer(out_channels, img_channels, w_dim=w_dim,
-                conv_clamp=conv_clamp, channels_last=self.channels_last, structure=structure, f_dim=f_dim, f_dim2=f_dim2)
+                conv_clamp=conv_clamp, channels_last=self.channels_last, structure=layer_kwargs['structure'],
+                f_dim=layer_kwargs['f_dim'], f_dim2=layer_kwargs['f_dim2'])
             self.num_torgb += 1
 
         if in_channels != 0 and architecture == 'resnet':
@@ -738,7 +737,6 @@ class SynthesisNetwork(torch.nn.Module):
         channel_max     = 512,      # Maximum number of channels in any layer.
         num_fp16_res    = 0,        # Use FP16 for the N highest resolutions.
         change          = 256,
-        structure       = 2,        # default structure
         **block_kwargs,             # Arguments for SynthesisBlock.
     ):
         assert img_resolution >= 4 and img_resolution & (img_resolution - 1) == 0
@@ -760,12 +758,12 @@ class SynthesisNetwork(torch.nn.Module):
             is_last = (res == self.img_resolution)
             
             if res <= change:
-                structure = structure
+                structure = block_kwargs['structure']
             else:
                 structure = 1
                 
             block = SynthesisBlock(in_channels, out_channels, w_dim=w_dim, resolution=res,
-                img_channels=img_channels, is_last=is_last, use_fp16=use_fp16, structure=structure, **block_kwargs)
+                img_channels=img_channels, is_last=is_last, use_fp16=use_fp16, **block_kwargs)
             self.num_ws += block.num_conv
             if is_last:
                 self.num_ws += block.num_torgb

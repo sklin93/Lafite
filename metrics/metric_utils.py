@@ -31,7 +31,7 @@ import torchvision.transforms as T
 class MetricOptions:
     def __init__(self, G_ema=None, G=None, D=None, M=None, G_kwargs={}, D_kwargs ={}, M_kwargs ={}, dataset_kwargs={},
         testset_kwargs={}, num_gpus=1, rank=0, device=None, progress=None, cache=True, txt_recon=True, img_recon=False,
-        metric_only_test=False, use_fmri=False, fmri_vec=None):
+        metric_only_test=False, use_fmri=False, fmri_vec=None, fmri_vec2=None, structure=2):
         assert 0 <= rank < num_gpus
         self.G              = G
 #         self.G_ema          = G_ema
@@ -54,7 +54,13 @@ class MetricOptions:
         self.img_recon = img_recon
         self.metric_only_test = metric_only_test
         self.use_fmri = use_fmri
+        if use_fmri:
+            assert fmri_vec is not None
         self.fmri_vec = fmri_vec
+        self.structure = structure
+        if use_fmri and structure == 4:
+            assert fmri_vec2 is not None
+        self.fmri_vec2 = fmri_vec2
 
 #----------------------------------------------------------------------------
 
@@ -337,10 +343,19 @@ def compute_feature_stats_for_generator(opts, detector_url, detector_kwargs, rel
                 print('entered except')
 
             with torch.no_grad():
+                _n = True
                 if opts.use_fmri:
                     fmri_vec = copy.deepcopy(opts.fmri_vec).eval().requires_grad_(False).to(opts.device)
                     txt_fts = fmri_vec(fmri.to(opts.device))
-                clip_txt_features = txt_fts/txt_fts.norm(dim=-1, keepdim=True)#.view((batch_size, -1))
+                    if opts.structure == 4:
+                        fmri_vec2 = copy.deepcopy(opts.fmri_vec2).eval().requires_grad_(False).to(opts.device)
+                        txt_fts_2 = fmri_vec2(fmri.to(opts.device)) - 0.5
+                        txt_fts = txt_fts/txt_fts.norm(dim=-1, keepdim=True)
+                        txt_fts_2 = txt_fts_2/txt_fts_2.norm(dim=-1, keepdim=True)
+                        clip_txt_features = torch.cat((txt_fts, txt_fts_2), -1)
+                        _n = False
+                if _n:
+                    clip_txt_features = txt_fts/txt_fts.norm(dim=-1, keepdim=True)#.view((batch_size, -1))
                 z = torch.randn([txt_fts.size()[0], G.z_dim], device=opts.device)
                 imgs = G(z=z, c=_labels.to(opts.device), fts=clip_txt_features.to(opts.device))
                 imgs = (imgs * 127.5 + 128).clamp(0, 255).to(torch.uint8)

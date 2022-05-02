@@ -1,6 +1,7 @@
 
 import numpy as np
 import torch
+import torch.nn as nn
 from torch_utils import training_stats
 from torch_utils import misc
 from torch_utils.ops import conv2d_gradfix
@@ -10,6 +11,11 @@ import clip
 import dnnlib
 import random
 # import matplotlib.pyplot as plt
+# import CLIP.clip as clip
+import sys
+sys.path.append('/home/sikun/vicreg/')
+from resnet import *
+del sys.path[-1]
 
 
 class Loss:
@@ -55,11 +61,181 @@ class Model(torch.nn.Module):
                 return -torch.log(sim1)
         else:
             return -torch.diagonal(sim)
+
+#----------------------------------------------------------------------------
+
+class ResNet(nn.Module):
+    def __init__(
+        self,
+        block,
+        layers,
+        num_channels=3,
+        zero_init_residual=False,
+        groups=1,
+        widen=1,
+        width_per_group=64,
+        replace_stride_with_dilation=None,
+        norm_layer=None,
+        last_activation="relu",
+        ):
+        super(ResNet, self).__init__()
+        if norm_layer is None:
+            norm_layer = nn.BatchNorm2d
+        self._norm_layer = norm_layer
+
+        self.padding = nn.ConstantPad2d(1, 0.0)
+
+        self.inplanes = width_per_group * widen
+        self.dilation = 1
+        if replace_stride_with_dilation is None:
+            # each element in the tuple indicates if we should replace
+            # the 2x2 stride with a dilated convolution instead
+            replace_stride_with_dilation = [False, False, False]
+        if len(replace_stride_with_dilation) != 3:
+            raise ValueError(
+                "replace_stride_with_dilation should be None "
+                "or a 3-element tuple, got {}".format(replace_stride_with_dilation)
+            )
+        self.groups = groups
+        self.base_width = width_per_group
+
+        # change padding 3 -> 2 compared to original torchvision code because added a padding layer
+        num_out_filters = width_per_group * widen
+        self.conv1 = nn.Conv2d(
+            num_channels,
+            num_out_filters,
+            kernel_size=7,
+            stride=2,
+            padding=2,
+            bias=False,
+        )
+        self.bn1 = norm_layer(num_out_filters)
+        self.relu = nn.ReLU(inplace=True)
+        self.maxpool = nn.MaxPool2d(kernel_size=3, stride=2, padding=1)
+        self.layer1 = self._make_layer(block, num_out_filters, layers[0])
+        num_out_filters *= 2
+        self.layer2 = self._make_layer(
+            block,
+            num_out_filters,
+            layers[1],
+            stride=2,
+            dilate=replace_stride_with_dilation[0],
+        )
+        num_out_filters *= 2
+        self.layer3 = self._make_layer(
+            block,
+            num_out_filters,
+            layers[2],
+            stride=2,
+            dilate=replace_stride_with_dilation[1],
+        )
+        num_out_filters *= 2
+        self.layer4 = self._make_layer(
+            block,
+            num_out_filters,
+            layers[3],
+            stride=2,
+            dilate=replace_stride_with_dilation[2],
+            last_activation=last_activation,
+        )
+        self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
+
+        for m in self.modules():
+            if isinstance(m, nn.Conv2d):
+                nn.init.kaiming_normal_(m.weight, mode="fan_out", nonlinearity="relu")
+            elif isinstance(m, (nn.BatchNorm2d, nn.GroupNorm)):
+                nn.init.constant_(m.weight, 1)
+                nn.init.constant_(m.bias, 0)
+
+        # Zero-initialize the last BN in each residual branch,
+        # so that the residual branch starts with zeros, and each residual block behaves like an identity.
+        # This improves the model by 0.2~0.3% according to https://arxiv.org/abs/1706.02677
+        if zero_init_residual:
+            for m in self.modules():
+                if isinstance(m, Bottleneck):
+                    nn.init.constant_(m.bn3.weight, 0)
+                elif isinstance(m, BasicBlock):
+                    nn.init.constant_(m.bn2.weight, 0)
+
+    def _make_layer(
+        self, block, planes, blocks, stride=1, dilate=False,
+        last_activation="relu"
+        ):
+        norm_layer = self._norm_layer
+        downsample = None
+        previous_dilation = self.dilation
+        if dilate:
+            self.dilation *= stride
+            stride = 1
+        if stride != 1 or self.inplanes != planes * block.expansion:
+            downsample = nn.Sequential(
+                conv1x1(self.inplanes, planes * block.expansion, stride),
+                norm_layer(planes * block.expansion),
+            )
+
+        layers = []
+        layers.append(
+            block(
+                self.inplanes,
+                planes,
+                stride,
+                downsample,
+                self.groups,
+                self.base_width,
+                previous_dilation,
+                norm_layer,
+                last_activation=(last_activation if blocks == 1 else "relu"),
+            )
+        )
+        self.inplanes = planes * block.expansion
+        for i in range(1, blocks):
+            layers.append(
+                block(
+                    self.inplanes,
+                    planes,
+                    groups=self.groups,
+                    base_width=self.base_width,
+                    dilation=self.dilation,
+                    norm_layer=norm_layer,
+                    last_activation=(last_activation if i == blocks - 1 else "relu"),
+                )
+            )
+
+        return nn.Sequential(*layers)
+
+    def forward(self, x, return_layer=4, chan_avg=False):
+        assert return_layer in [1, 2, 3, 4], (
+            'you can only return embeddings after layer 1, 2, 3, 4.')
+
+        x = self.padding(x)
+        x = self.conv1(x)
+        x = self.bn1(x)
+        x = self.relu(x)
+        x = self.maxpool(x) # 64, 56, 56
+        x = self.layer1(x) # 256, 56, 56
+        if return_layer == 1:
+            return torch.flatten(self.avgpool(x), 1) if chan_avg else x
+        x = self.layer2(x) # 512, 28, 28
+        if return_layer == 2:
+            return torch.flatten(self.avgpool(x), 1) if chan_avg else x
+        x = self.layer3(x) # 1024, 14, 14
+        if return_layer == 3:
+            return torch.flatten(self.avgpool(x), 1) if chan_avg else x
+        x = self.layer4(x) # 2048, 7, 7
+        return torch.flatten(self.avgpool(x), 1) if chan_avg else x
+
+def resnet50(layer=2, pretrained=True, **kwargs):
+    model = ResNet(Bottleneck, [3, 4, 6, 3], **kwargs)
+    emb = {1: 256, 2: 512, 3: 1024, 4: 2048}
+    if pretrained:
+        misc.load_trained_model('/home/sikun/vicreg/resnet50.pth', model)
+    return model, emb[layer]
+
 #----------------------------------------------------------------------------
 
 class StyleGAN2Loss(Loss):
     def __init__(self, device, G_mapping, G_synthesis, G_mani, D, augment_pipe=None, style_mixing_prob=0.9,
-        r1_gamma=10, pl_batch_shrink=2, pl_decay=0.01, pl_weight=2, use_fmri=False, fmri_vec=None):
+        r1_gamma=10, pl_batch_shrink=2, pl_decay=0.01, pl_weight=2, use_fmri=False, fmri_vec=None, fmri_vec2=None):
         super().__init__()
         self.device = device
         self.G_mapping = G_mapping
@@ -82,6 +258,12 @@ class StyleGAN2Loss(Loss):
         if use_fmri:
             assert fmri_vec is not None, 'must provide mapper model if use fmri for end to end traing'
             self.fmri_vec = fmri_vec
+            if fmri_vec2 is not None:
+                self.fmri_vec2 = fmri_vec2
+                # hardcoded assuming the second branch is reflecting resnet vector conditions
+                self.return_layer = 2
+                resnet, _ = resnet50(layer=self.return_layer, zero_init_residual=True)
+                self.resnet = resnet.to(device).eval()
 
     def run_G(self, z, c, sync, txt_fts=None, ):
         with misc.ddp_sync(self.G_mapping, sync):
@@ -116,21 +298,27 @@ class StyleGAN2Loss(Loss):
             T.Normalize((0.48145466, 0.4578275, 0.40821073), (0.26862954, 0.26130258, 0.27577711)),
         ])
     
-    def full_preprocess(self, img, mode='bicubic', ratio=0.5):
+    def full_preprocess(self, img, mode='bicubic', ratio=0.5, fix_size=224):
         full_size = img.shape[-2]
 
-        if full_size < 224:
-            pad_1 = torch.randint(0, 224-full_size, ())
-            pad_2 = torch.randint(0, 224-full_size, ())
-            m = torch.nn.ConstantPad2d((pad_1, 224-full_size-pad_1, pad_2, 224-full_size-pad_2), 1.)
+        if full_size < fix_size:
+            pad_1 = torch.randint(0, fix_size-full_size, ())
+            pad_2 = torch.randint(0, fix_size-full_size, ())
+            m = torch.nn.ConstantPad2d((pad_1, fix_size-full_size-pad_1, pad_2, fix_size-full_size-pad_2), 1.)
             reshaped_img = m(img)
         else:
-            cut_size = torch.randint(int(ratio*full_size), full_size, ())
-            left = torch.randint(0, full_size-cut_size, ())
-            top = torch.randint(0, full_size-cut_size, ())
-            cropped_img = img[:, :, top:top+cut_size, left:left+cut_size]
-            reshaped_img = F.interpolate(cropped_img, (224, 224), mode=mode, align_corners=False)
+            if ratio == 1:
+                cropped_img = img
+            else:
+                cut_size = torch.randint(int(ratio*full_size), full_size, ())
+                left = torch.randint(0, full_size-cut_size, ())
+                top = torch.randint(0, full_size-cut_size, ())
+                cropped_img = img[:, :, top:top+cut_size, left:left+cut_size]
+            reshaped_img = F.interpolate(cropped_img, (fix_size, fix_size), mode=mode, align_corners=False)
+        # print(f'reshaped_img range before {reshaped_img.min()}, {reshaped_img.max()}')
         reshaped_img = (reshaped_img + 1.)*0.5 # range in [0., 1.] now
+        # print(f'reshaped_img range after {reshaped_img.min()}, {reshaped_img.max()}')
+        # TODO double check this for structure==4 after training
         reshaped_img = self.normalize()(reshaped_img)
         return  reshaped_img
 
@@ -180,7 +368,25 @@ class StyleGAN2Loss(Loss):
             # get txt_fts from mapper model
             txt_fts = self.fmri_vec(fmri)
             # print(f'txt_fts through mapper: {txt_fts.shape}')
-        assert txt_fts is not None
+            if structure == 4:
+                # assert self.fmri_vec2 is not None
+                txt_fts_2 = self.fmri_vec2(fmri) - 0.5 # make it [-0.5, 0.5 range]
+                # plt.plot(txt_fts[0].detach().cpu().numpy(), label='before norm fts')
+                # plt.plot(txt_fts_2[0].detach().cpu().numpy(), label='before norm fts2')
+                # plt.legend()
+                # plt.show()
+
+                # Normalize to make it the same scale as txt_fts
+                txt_fts = txt_fts/txt_fts.norm(dim=-1, keepdim=True)
+                txt_fts_2 = txt_fts_2/txt_fts_2.norm(dim=-1, keepdim=True)
+                # plt.plot(txt_fts[0].detach().cpu().numpy())
+                # plt.plot(txt_fts_2[0].detach().cpu().numpy())
+                # plt.show()
+
+                # Concat for coherent processing later (since use_fmri==False case the conditions are concatenated)
+                txt_fts = torch.cat((txt_fts, txt_fts_2), -1)
+                # txt_fts_gt2 = None
+        # assert txt_fts is not None
 
         do_Gmain = (phase in ['Gmain', 'Gboth'])
         do_Dmain = (phase in ['Dmain', 'Dboth'])
@@ -194,21 +400,23 @@ class StyleGAN2Loss(Loss):
 
         # the semantic similarity of perturbed feature with real feature would be:
         # sim >= (sqrt(1 - aug_level^2)-aug_level)/(sqrt(1 + 2*aug_level*sqrt(1 - aug_level^2)))
-        mixing_prob = mixing_prob # probability to use img_fts instead of txt_fts
+        # mixing_prob = mixing_prob # probability to use img_fts instead of txt_fts
         random_noise = torch.randn(txt_fts.shape).to(img_fts.device)# + torch.randn((1, 512)).to(img_fts.device)
         random_noise = random_noise/random_noise.norm(dim=-1, keepdim=True)
         txt_fts_ = txt_fts*(1-aug_level_1) + random_noise*aug_level_1 # TODO: try w/o this aug? (seems quite small, so keep it)
 
         if structure == 4:
             txt_fts_2 = txt_fts_[:, f_dim:f_dim+f_dim2]
-            txt_fts_gt2 = txt_fts_[:, f_dim+f_dim2:]
+            # txt_fts_gt2 = txt_fts_[:, f_dim+f_dim2:]
             txt_fts_ = txt_fts_[:, :f_dim]
-        # print(txt_fts_.shape, txt_fts_2.shape, txt_fts_gt2.shape, txt_fts_gt2.shape[-1])
+
+        # print(txt_fts_.shape, txt_fts_2.shape)#, txt_fts_gt2.shape, txt_fts_gt2.shape[-1])
         txt_fts_ = txt_fts_/txt_fts_.norm(dim=-1, keepdim=True)
+
         if structure == 4:
             txt_fts_2 = txt_fts_2/txt_fts_2.norm(dim=-1, keepdim=True)
-            if txt_fts_gt2.shape[-1] > 0:
-                txt_fts_gt2 = txt_fts_gt2/txt_fts_gt2.norm(dim=-1, keepdim=True)
+            # if txt_fts_gt2 is not None and txt_fts_gt2.shape[-1] > 0:
+                # txt_fts_gt2 = txt_fts_gt2/txt_fts_gt2.norm(dim=-1, keepdim=True)
 
         if txt_fts.shape[-1] == img_fts.shape[-1]:
             # Gaussian purterbation
@@ -253,8 +461,8 @@ class StyleGAN2Loss(Loss):
         # print('txt_fts_all:', txt_fts_all.shape)
         if structure == 4:
             txt_fts_2_all = gather_tensor(txt_fts_2, gather)
-            if txt_fts_gt2.shape[-1] > 0:
-                txt_fts_gt2_all = gather_tensor(txt_fts_gt2, gather)
+            # if txt_fts_gt2 is not None and txt_fts_gt2.shape[-1] > 0:
+                # txt_fts_gt2_all = gather_tensor(txt_fts_gt2, gather)
 
         # Gmain: Maximize logits for generated images.
         if do_Gmain:
@@ -275,7 +483,9 @@ class StyleGAN2Loss(Loss):
 
                 loss_Gmain = torch.nn.functional.softplus(-gen_logits) # -log(sigmoid(gen_logits))
 
+                # print(f'gen img shape: {gen_img.shape}, range: {gen_img.min(), gen_img.max()}')
                 normed_gen_full_img = self.full_preprocess(gen_img)
+                # print(f'normed gen img shape: {normed_gen_full_img.shape}, range: {normed_gen_full_img.min(), normed_gen_full_img.max()}')
                 img_fts_gen_full = self.clip_model.encode_image(normed_gen_full_img)
                 img_fts_gen_full = img_fts_gen_full/img_fts_gen_full.norm(dim=-1, keepdim=True)
 
@@ -285,10 +495,30 @@ class StyleGAN2Loss(Loss):
                     clip_loss_img_txt = self.contra_loss(temp, img_fts_gen_full_all, txt_fts_all, lam)
                     loss_Gmain = loss_Gmain - img_txt_c*clip_loss_img_txt.mean()
                     if structure == 4:
-                        # can also use contra_loss(temp, clip_txt(cap(gen_img)), txt_fts_2_all, lam), but this requires caption model
-                        # if using different model like resnet, use contra_loss(temp, resnet(normed_gen_full_img), txt_fts_2_all, lam)
-                        clip_loss_img_txt2 = self.contra_loss(temp, img_fts_gen_full_all, txt_fts_2_all, lam)
-                        loss_Gmain = loss_Gmain - img_txt_c*clip_loss_img_txt2.mean()
+                        # clip_loss_img_txt2 = self.contra_loss(temp, img_fts_gen_full_all, txt_fts_2_all, lam)
+                        # loss_Gmain = loss_Gmain - img_txt_c*clip_loss_img_txt2.mean()
+
+                        # Can also use contra_loss(temp, clip_txt(cap(gen_img)), txt_fts_2_all, lam), but this requires caption model
+                        # If using different model like resnet, use contra_loss(temp, resnet(normed_gen_full_img), txt_fts_2_all, lam)
+                        normed_gen_full_img2 = self.full_preprocess(gen_img, ratio=1.0, fix_size=128)
+                        img_vec = self.resnet(normed_gen_full_img2, chan_avg=False, return_layer=self.return_layer)
+                        max_vec = img_vec.max(1)[0]
+                        mean_vec = img_vec.mean(1)
+                        img_vec = max_vec / max_vec.max() + 2 * mean_vec / mean_vec.max()
+                        img_vec = img_vec.flatten(start_dim=1)
+                        # to 0 - 1
+                        img_vec -= 0.67
+                        img_vec /= 2.33
+                        # to -0.5 - 0.5
+                        img_vec -= 0.5
+                        img_vec = img_vec/img_vec.norm(dim=-1, keepdim=True)
+                        img_vec_all = gather_tensor(img_vec, gather)
+                        # plt.plot(img_vec_all[0].detach().cpu().numpy(), label='from gen img')
+                        # plt.plot(txt_fts_2_all[0].detach().cpu().numpy(), label='txt')
+                        # plt.legend()
+                        # plt.show()
+                        vec_loss_img_txt = self.contra_loss(temp, img_vec_all, txt_fts_2_all, lam)
+                        loss_Gmain = loss_Gmain - img_txt_c*vec_loss_img_txt.mean()
 
                 if img_img_c > 0.:
                     clip_loss_img_img = self.contra_loss(temp, img_fts_gen_full_all, img_fts_all, lam)

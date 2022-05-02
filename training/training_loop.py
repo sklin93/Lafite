@@ -96,6 +96,7 @@ def training_loop(
     G_kwargs                = {},       # Options for generator network.
     D_kwargs                = {},       # Options for discriminator network.
     mapper_kwargs           = {},
+    mapper2_kwargs          = {},
     # M_kwargs                = {},
     G_opt_kwargs            = {},       # Options for generator optimizer.
     D_opt_kwargs            = {},       # Options for discriminator optimizer.
@@ -176,9 +177,14 @@ def training_loop(
     G_ema = copy.deepcopy(G).eval()
     if use_fmri:
         fmri_vec = dnnlib.util.construct_class_by_name(**mapper_kwargs).train().requires_grad_(False).to(device) # subclass of torch.nn.Module
-        # TODO: first time only, remove afterwards
-        # misc.load_trained_model('/home/sikun/bold5k/data/weights/fmri_clipcapnorm_mse_cos_thr.pth', fmri_vec)
+        # first time only, remove afterwards
+        misc.load_trained_model('/home/sikun/bold5k/data/weights/fmri_clipcapnorm_mse_cos_thr_noBN_0.19923493794099553.pth', fmri_vec)
         fmri_vec.to(torch.double)
+        if structure == 4:
+            fmri_vec2 = dnnlib.util.construct_class_by_name(**mapper2_kwargs).train().requires_grad_(False).to(device) # subclass of torch.nn.Module
+            # first time only, remove afterwards
+            misc.load_trained_model('/home/sikun/bold5k/data/weights/fmri_dnn_noBN_0.010493216838130332.pth', fmri_vec2)
+            fmri_vec2.to(torch.double)
 
     # Resume from existing pickle.
     if (resume_pkl is not None) and (rank == 0):
@@ -188,6 +194,8 @@ def training_loop(
         nm_pairs = [('G', G), ('D', D), ('G_ema', G_ema)]
         if use_fmri:
             nm_pairs.append(('fmri_vec', fmri_vec))
+            if structure == 4:
+                nm_pairs.append(('fmri_vec2', fmri_vec2))
         for name, module in nm_pairs:
             print(name, module)
             forced_map = {}
@@ -233,6 +241,8 @@ def training_loop(
     nm_pairs = [('G_mapping', G.mapping), ('G_synthesis', G.synthesis), ('G_mani', G.mani), ('D', D), (None, G_ema), ('augment_pipe', augment_pipe)]
     if use_fmri:
         nm_pairs.append(('fmri_vec', fmri_vec))
+        if structure == 4:
+            nm_pairs.append(('fmri_vec2', fmri_vec2))
     for name, module in nm_pairs:
         if (num_gpus > 1) and (module is not None) and len(list(module.parameters())) != 0:
             module.requires_grad_(True)
@@ -535,6 +545,8 @@ def training_loop(
             nm_pairs = [('G', G), ('D', D), ('G_ema', G_ema), ('augment_pipe', augment_pipe)]
             if use_fmri:
                 nm_pairs.append(('fmri_vec', fmri_vec))
+                if structure == 4:
+                    nm_pairs.append(('fmri_vec2', fmri_vec2))
             for name, module in nm_pairs:
                 if module is not None:
                     if num_gpus > 1:
@@ -555,10 +567,11 @@ def training_loop(
             
             for metric in metrics:
                 fmri_vec_eval = snapshot_data['fmri_vec'] if use_fmri else None
+                fmri_vec2_eval = snapshot_data['fmri_vec2'] if (use_fmri and structure==4) else None
                 result_dict = metric_main.calc_metric(metric=metric, G=snapshot_data['G_ema'], D=snapshot_data['D'],
                     dataset_kwargs=training_set_kwargs, testset_kwargs=testing_set_kwargs, num_gpus=num_gpus, rank=rank,
                     device=device, txt_recon=True, img_recon=False, metric_only_test=metric_only_test, use_fmri=use_fmri,
-                    fmri_vec=fmri_vec_eval)
+                    fmri_vec=fmri_vec_eval, fmri_vec2=fmri_vec2_eval, structure=structure)
                 # result_dict = metric_main.calc_metric(metric=metric, G=snapshot_data['G_ema'], D = snapshot_data['D'],
                 #     dataset_kwargs=training_set_kwargs, testset_kwargs=testing_set_kwargs, num_gpus=num_gpus, rank=rank,
                 #     device=device, txt_recon=False, img_recon=True)
