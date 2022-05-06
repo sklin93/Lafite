@@ -155,6 +155,7 @@ def copy_params_and_buffers(src_module, dst_module, require_all=False, forced_ma
         if name in forced_map:
             # print(name)
             tensor.copy_(src_tensors[forced_map[name]].detach()).requires_grad_(tensor.requires_grad)
+            print(f'weights from {forced_map[name]} are mapped to {name}.')
 
 #----------------------------------------------------------------------------
 # Context manager for easily enabling/disabling DistributedDataParallel

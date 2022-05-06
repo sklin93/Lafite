@@ -178,12 +178,16 @@ def training_loop(
     if use_fmri:
         fmri_vec = dnnlib.util.construct_class_by_name(**mapper_kwargs).train().requires_grad_(False).to(device) # subclass of torch.nn.Module
         # first time only, remove afterwards
-        misc.load_trained_model('/home/sikun/bold5k/data/weights/fmri_clipcapnorm_mse_cos_thr_noBN_0.19923493794099553.pth', fmri_vec)
+        # misc.load_trained_model('/home/sikun/bold5k/data/weights/fmri_clipcapnorm_mse_cos_thr_noBN_0.19923493794099553.pth', fmri_vec) # cap
+        # misc.load_trained_model('/home/sikun/bold5k/data/weights/fmri_clipcapnorm_mse_cos_contra_thr_noBN_2.3636860251426697.pth', fmri_vec) # cap with contra
+        # misc.load_trained_model('/home/sikun/bold5k/data/weights/fmri_clipnorm_mse_cos_aug_thr_noBN_0.19915693834072024.pth', fmri_vec) # img
+        misc.load_trained_model('/home/sikun/bold5k/data/weights/fmri_clipnorm_mse_cos_contra_aug_thr_noBN_2.3462039679288864.pth', fmri_vec) # img with contra
         fmri_vec.to(torch.double)
         if structure == 4:
             fmri_vec2 = dnnlib.util.construct_class_by_name(**mapper2_kwargs).train().requires_grad_(False).to(device) # subclass of torch.nn.Module
             # first time only, remove afterwards
-            misc.load_trained_model('/home/sikun/bold5k/data/weights/fmri_dnn_noBN_0.010493216838130332.pth', fmri_vec2)
+            # misc.load_trained_model('/home/sikun/bold5k/data/weights/fmri_dnn_noBN_0.010493216838130332.pth', fmri_vec2)
+            misc.load_trained_model('/home/sikun/bold5k/data/weights/fmri_clipcapnorm_mse_cos_contra_thr_noBN_2.3636860251426697.pth', fmri_vec2) # cap with contra
             fmri_vec2.to(torch.double)
 
     # Resume from existing pickle.
@@ -201,6 +205,7 @@ def training_loop(
             forced_map = {}
             if enabled_forced_map: # to copy the same weights to different pre_0 and pre_1 branches
                 forced_map = {}
+                # generator pre_0, pre_1
                 for i in [4, 8, 16, 32, 64, 128, 256]:
                     for j in ['conv0', 'conv1' , 'torgb']:
                         for k in [0, 1]:
@@ -211,6 +216,9 @@ def training_loop(
                                 cur_v = f'synthesis.b{i}.{j}.pre_{k}.{v}'
                                 # print(cur_k, ',', cur_v)
                                 forced_map[cur_k] = cur_v
+                # discriminator fts
+                for v in ['weight','bias']:
+                    forced_map[f'b4.fts2.{v}'] = f'b4.fts.{v}'
             # first time no existing mapper model
             if name in resume_data:
                 misc.copy_params_and_buffers(resume_data[name], module, require_all=False, forced_map=forced_map)
@@ -256,7 +264,8 @@ def training_loop(
         print('Setting up training phases...')
     loss = dnnlib.util.construct_class_by_name(device=device, **ddp_modules, **loss_kwargs) # subclass of training.loss.Loss
     phases = []
-    
+
+    # TODO: add mapper m_opt_kwargs
     for name, module, opt_kwargs, reg_interval in [('G', G, G_opt_kwargs, G_reg_interval), ('D', D, D_opt_kwargs, D_reg_interval)]:
         if reg_interval is None:
             opt = dnnlib.util.construct_class_by_name(params=module.parameters(), **opt_kwargs) # subclass of torch.optim.Optimizer

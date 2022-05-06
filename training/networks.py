@@ -425,7 +425,8 @@ class SynthesisLayer(torch.nn.Module):  # <-- added (change)
             _f_dim2 = (f_dim2 + 512)//2
             self.pre_01 = FullyConnectedLayer(f_dim2, _f_dim2, activation='lrelu', lr_multiplier=0.01) # pre process text features
             self.pre_11 = FullyConnectedLayer(_f_dim2, 512, activation='lrelu', lr_multiplier=0.01)
-            self.affine_1 = FullyConnectedLayer(w_dim+512*2, in_channels, bias_init=1)# f([w, txt])
+            # self.affine_1 = FullyConnectedLayer(w_dim+512*2, in_channels, bias_init=1)# f([w, txt])
+            self.affine_0 = FullyConnectedLayer(w_dim+512, in_channels, bias_init=1)# f([w, txt])
             self.f_dim = f_dim
             self.f_dim2 = f_dim2
 
@@ -475,7 +476,8 @@ class SynthesisLayer(torch.nn.Module):  # <-- added (change)
                 fts1 = self.pre_1(fts1)
                 fts2 = self.pre_01(fts2)
                 fts2 = self.pre_11(fts2)
-                styles = self.affine_1(torch.cat([fts1, fts2, w], dim=-1))
+                # styles = self.affine_1(torch.cat([fts1, fts2, w], dim=-1))
+                styles = self.affine_0(torch.cat([torch.max(fts1, fts2), w], dim=-1))
 
             else:
                 raise('structure undefined')
@@ -541,7 +543,8 @@ class ToRGBLayer(torch.nn.Module):
             _f_dim2 = (f_dim2 + 512)//2
             self.pre_01 = FullyConnectedLayer(f_dim2, _f_dim2, activation='lrelu', lr_multiplier=0.01) # pre process text features  
             self.pre_11 = FullyConnectedLayer(_f_dim2, 512, activation='lrelu', lr_multiplier=0.01)
-            self.affine_1 = FullyConnectedLayer(w_dim+512*2, in_channels, bias_init=1)# f([w, txt])
+            # self.affine_1 = FullyConnectedLayer(w_dim+512*2, in_channels, bias_init=1)# f([w, txt])
+            self.affine_0 = FullyConnectedLayer(w_dim+512, in_channels, bias_init=1)# f([w, txt])
             self.f_dim = f_dim
             self.f_dim2 = f_dim2
 
@@ -587,7 +590,8 @@ class ToRGBLayer(torch.nn.Module):
                 fts1 = self.pre_1(fts1)
                 fts2 = self.pre_01(fts2)
                 fts2 = self.pre_11(fts2)
-                styles = self.affine_1(torch.cat([fts1, fts2, w], dim=-1))
+                # styles = self.affine_1(torch.cat([fts1, fts2, w], dim=-1))
+                styles = self.affine_0(torch.cat([torch.max(fts1, fts2), w], dim=-1))
 
             else:
                 raise('structure undefined')                
@@ -1046,7 +1050,7 @@ class DiscriminatorEpilogue(torch.nn.Module):
                 d_fts2 = self.fts2(fc)
                 if use_norm:
                     d_fts2 = d_fts2/d_fts2.norm(dim=-1, keepdim=True)
-                x = x + (d_fts*fts[:, :self.f_dim]).sum() + (d_fts2*fts[:, self.f_dim:self.f_dim+self.f_dim2]).sum()
+                x = x + 0.5 * (d_fts*fts[:, :self.f_dim]).sum() + 0.5 * (d_fts2*fts[:, self.f_dim:self.f_dim+self.f_dim2]).sum()
             else:
                 x = x + (d_fts*fts).sum()
         else:

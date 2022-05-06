@@ -1,0 +1,12 @@
+#!/bin/bash
+#SBATCH -N 2 --partition=gpu --ntasks-per-node=2
+#SBATCH --time=80:00:00
+#SBATCH --gres=gpu:4
+#SBATCH --nodes=2
+
+cd /home/sikun/Lafite/
+
+/bin/hostname
+source /home/sikun/.bashrc
+source activate base
+srun --gres=gpu:4 nohup python /home/sikun/Lafite/train.py --gpus=4 --outdir=/home/sikun/Lafite/out/ --temp=0.5 --itd=5 --itc=10 --gamma=10 --mirror=1 --data=/home/sikun/NSD/data/clip_features/nsd_clip_train.json --test_data=/home/sikun/NSD/data/clip_features/nsd_clip_val.json --mixing_prob=0.0 --cond_vec=cap --resume=./out/00009-nsd_clip_train-mirror-auto-lam0-temp0.5-map_num8-gpus2-gamma10-resumecustom_e2e_2br/network-snapshot-000320.pkl --snap=20 --use_fmri=True --structure=4 --f_dim2=256 > log_e2e_fromLF_caprand_dnnsp 2>&1 &
