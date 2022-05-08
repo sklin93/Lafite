@@ -345,7 +345,7 @@ class StyleGAN2Loss(Loss):
     def contra_loss(self, temp, mat1, mat2, lam):
         sim = torch.cosine_similarity(mat1.unsqueeze(1), mat2.unsqueeze(0), dim=-1)
         if temp > 0.:
-            sim = torch.exp(sim/temp) # TODO: This implementation is incorrect, it should be sim=sim/temp.
+            sim = torch.exp(sim/temp) # TODO: This implementation is incorrect, it should be sim=sim/temp. change hp
             # However, this incorrect implementation can reproduce our results with provided hyper-parameters.
             # If you want to use the correct implementation, please manually revise it.
             # The correct implementation should lead to better results, but don't use our provided hyper-parameters, you need to carefully tune lam, temp, itd, itc and other hyper-parameters
@@ -360,12 +360,20 @@ class StyleGAN2Loss(Loss):
         else:
             return torch.diagonal(sim)
 
+    def mse_cos_contra_loss(self, temp, y_pred, y, lam, a1=0.2, a2=0.3, a3=0.5):
+        l_mse = nn.MSELoss()(y_pred, y)
+        target = torch.ones(len(y)).to(y.device)
+        l_cos = nn.CosineEmbeddingLoss()(y_pred, y, target)
+        return a1*l_mse + a2*l_cos - a3*self.contra_loss(temp, y_pred, y, lam).mean()
+
     def accumulate_gradients(self, phase, real_img, real_c, gen_z, gen_c, sync, gain, img_fts, lam, temp,
         gather, d_use_fts, itd, itc, iid, iic, mixing_prob=0., txt_fts=None, fmri=None, structure=2,
         f_dim=512, f_dim2=512):
+        # print(phase)
+        assert phase in ['Gmain', 'Greg', 'Gboth', 'Dmain', 'Dreg', 'Dboth', 'Mmain', 'Mboth', 'Mreg', 'M2main', 'M2both', 'M2reg'], phase
 
-        assert phase in ['Gmain', 'Greg', 'Gboth', 'Dmain', 'Dreg', 'Dboth']
         if self.use_fmri:
+            txt_fts_gt = txt_fts.clone()
             assert fmri is not None, 'fmri data must be provided if using fmri'
             # get txt_fts from mapper model
             txt_fts = self.fmri_vec(fmri)
@@ -376,27 +384,36 @@ class StyleGAN2Loss(Loss):
                 if self.vec2_res:
                     txt_fts_2 = txt_fts_2 - 0.5 # make it [-0.5, 0.5 range]
 
-                # plt.plot(txt_fts[0].detach().cpu().numpy(), label='before norm fts')
-                # plt.plot(txt_fts_2[0].detach().cpu().numpy(), label='before norm fts2')
-                # plt.legend()
-                # plt.show()
+                    # plt.plot(txt_fts[0].detach().cpu().numpy(), label='before norm fts')
+                    # plt.plot(txt_fts_2[0].detach().cpu().numpy(), label='before norm fts2')
+                    # plt.legend()
+                    # plt.show()
 
-                # Normalize to make it the same scale as txt_fts
-                txt_fts = txt_fts/txt_fts.norm(dim=-1, keepdim=True)
-                txt_fts_2 = txt_fts_2/txt_fts_2.norm(dim=-1, keepdim=True)
-                # plt.plot(txt_fts[0].detach().cpu().numpy())
-                # plt.plot(txt_fts_2[0].detach().cpu().numpy())
-                # plt.show()
+                    # Normalize to make it the same scale as txt_fts
+                    txt_fts = txt_fts/txt_fts.norm(dim=-1, keepdim=True)
+                    txt_fts_2 = txt_fts_2/txt_fts_2.norm(dim=-1, keepdim=True)
+                    # plt.plot(txt_fts[0].detach().cpu().numpy())
+                    # plt.plot(txt_fts_2[0].detach().cpu().numpy())
+                    # plt.show()
 
-                # Concat for coherent processing later (since use_fmri==False case the conditions are concatenated)
-                txt_fts = torch.cat((txt_fts, txt_fts_2), -1)
+                # txt_fts = torch.cat((txt_fts, txt_fts_2), -1)
                 # txt_fts_gt2 = None
-        # assert txt_fts is not None
+        else:
+            # Use_fmri==False case the conditions are concatenated, separate them here
+            if self.structure == 4 and len(txt_fts) > f_dim:
+                txt_fts_2 = txt_fts[:, f_dim : f_dim + f_dim2]
+                # txt_fts_gt2 = txt_fts[:, f_dim+f_dim2:]
+                txt_fts = txt_fts[:, :f_dim]
 
+        # assert txt_fts is not None
         do_Gmain = (phase in ['Gmain', 'Gboth'])
         do_Dmain = (phase in ['Dmain', 'Dboth'])
+        do_Mmain = (phase in ['Mmain', 'Mboth'])
+        do_M2main = (phase in ['M2main', 'M2both'])
         do_Gpl   = (phase in ['Greg', 'Gboth']) and (self.pl_weight != 0)
         do_Dr1   = (phase in ['Dreg', 'Dboth']) and (self.r1_gamma != 0)
+        # do_Mreg  = (phase in ['Mreg', 'Mboth']) # TODO
+        # do_M2reg  = (phase in ['M2reg', 'M2both'])
 
         # augmentation
         aug_level_1 = 0.1
@@ -410,18 +427,28 @@ class StyleGAN2Loss(Loss):
         random_noise = random_noise/random_noise.norm(dim=-1, keepdim=True)
         txt_fts_ = txt_fts*(1-aug_level_1) + random_noise*aug_level_1
 
-        if structure == 4:
-            txt_fts_2 = txt_fts_[:, f_dim:f_dim+f_dim2]
-            # txt_fts_gt2 = txt_fts_[:, f_dim+f_dim2:]
-            txt_fts_ = txt_fts_[:, :f_dim]
-
         # print(txt_fts_.shape, txt_fts_2.shape)#, txt_fts_gt2.shape, txt_fts_gt2.shape[-1])
         txt_fts_ = txt_fts_/txt_fts_.norm(dim=-1, keepdim=True)
 
         if structure == 4:
+            random_noise = torch.randn(txt_fts_2.shape).to(img_fts.device)# + torch.randn((1, 512)).to(img_fts.device)
+            random_noise = random_noise/random_noise.norm(dim=-1, keepdim=True)
+            txt_fts_2 = txt_fts_2*(1-aug_level_1) + random_noise*aug_level_1
             txt_fts_2 = txt_fts_2/txt_fts_2.norm(dim=-1, keepdim=True)
             # if txt_fts_gt2 is not None and txt_fts_gt2.shape[-1] > 0:
                 # txt_fts_gt2 = txt_fts_gt2/txt_fts_gt2.norm(dim=-1, keepdim=True)
+            txt_fts_1 = txt_fts_ # IT IS PASS BY REF, TAKE CARE
+            txt_fts_ = torch.cat((txt_fts_1, txt_fts_2), -1)
+            # txt_fts_.requires_grad_()
+        #     print(phase, txt_fts_1.requires_grad, txt_fts_2.requires_grad, txt_fts_.requires_grad)
+        # else:
+        #     print(phase, txt_fts_.requires_grad)
+
+        # print(txt_fts_1.shape, txt_fts_2.shape, txt_fts_.shape)
+        # plt.plot(txt_fts_1[0].detach().cpu().numpy(), label='img')
+        # plt.plot(txt_fts_2[0].detach().cpu().numpy(), label='cap')
+        # plt.legend()
+        # plt.show()
 
         if txt_fts.shape[-1] == img_fts.shape[-1]:
             # Gaussian purterbation
@@ -461,22 +488,23 @@ class StyleGAN2Loss(Loss):
                 return torch.cat(output_tensor)
             else:
                 return input_tensor
-
-        txt_fts_all = gather_tensor(txt_fts_, gather)
-        # print('txt_fts_all:', txt_fts_all.shape)
+        
         if structure == 4:
+            txt_fts_all = gather_tensor(txt_fts_1, gather)
             txt_fts_2_all = gather_tensor(txt_fts_2, gather)
             # if txt_fts_gt2 is not None and txt_fts_gt2.shape[-1] > 0:
                 # txt_fts_gt2_all = gather_tensor(txt_fts_gt2, gather)
+        else:
+            txt_fts_all = gather_tensor(txt_fts_, gather)
+            # print('txt_fts_all:', txt_fts_all.shape)
 
         # Gmain: Maximize logits for generated images.
         if do_Gmain:
             with torch.autograd.profiler.record_function('Gmain_forward'):
+                gen_img, _ = self.run_G(gen_z, gen_c, txt_fts=txt_fts_, sync=(sync and not do_Gpl)) # May get synced by Gpl.
                 if structure == 4:
-                    gen_img, _gen_ws = self.run_G(gen_z, gen_c, txt_fts=torch.cat((txt_fts_, txt_fts_2), -1), sync=(sync and not do_Gpl)) # May get synced by Gpl.
-                    gen_logits, gen_d_fts, gen_d_fts_2 = self.run_D(gen_img, gen_c, sync=False, fts=torch.cat((txt_fts_, txt_fts_2), -1), structure=structure)
+                    gen_logits, gen_d_fts, gen_d_fts_2 = self.run_D(gen_img, gen_c, sync=False, fts=txt_fts_, structure=structure)
                 else:
-                    gen_img, _gen_ws = self.run_G(gen_z, gen_c, txt_fts=txt_fts_, sync=(sync and not do_Gpl)) # May get synced by Gpl.
                     gen_logits, gen_d_fts = self.run_D(gen_img, gen_c, sync=False, fts=txt_fts_, structure=structure)
 
                 gen_d_fts_all = gather_tensor(gen_d_fts, gather)
@@ -528,7 +556,7 @@ class StyleGAN2Loss(Loss):
                             loss_Gmain = loss_Gmain - img_txt_c*clip_loss_img_txt2.mean()
                             # Can also use contra_loss(temp, clip_txt(cap(gen_img)), txt_fts_2_all, lam), but this requires caption model
 
-                if img_img_c > 0.:
+                if img_img_c > 0.: # using ground truth one
                     clip_loss_img_img = self.contra_loss(temp, img_fts_gen_full_all, img_fts_all, lam)
                     loss_Gmain = loss_Gmain - img_img_c*clip_loss_img_img.mean()
                     # similarly, contra_loss(temp, clip_txt(cap(gen_img)), txt_fts_gt2_all, lam), but this requires caption model
@@ -541,7 +569,7 @@ class StyleGAN2Loss(Loss):
                 if img_img_d > 0.:
                     if structure == 4:
                         with torch.no_grad():
-                            _, g_real_d_fts, g_real_d_fts_2 = self.run_D(real_img.detach(), real_c, sync=False, fts=torch.cat((txt_fts_, txt_fts_2), -1), structure=structure)
+                            _, g_real_d_fts, g_real_d_fts_2 = self.run_D(real_img.detach(), real_c, sync=False, fts=txt_fts_, structure=structure)
                         g_real_d_fts_all = gather_tensor(g_real_d_fts, gather)
                         g_real_d_fts_2_all = gather_tensor(g_real_d_fts_2, gather)
                         loss_Gmain = loss_Gmain - img_img_d*self.contra_loss(temp, g_real_d_fts_all, gen_d_fts_all, lam).mean()
@@ -562,7 +590,7 @@ class StyleGAN2Loss(Loss):
                 batch_size = gen_z.shape[0] // self.pl_batch_shrink
 
                 if structure == 4:
-                    txt_fts_1_0 = txt_fts_[:batch_size]
+                    txt_fts_1_0 = txt_fts_1[:batch_size]
                     txt_fts_2_0 = txt_fts_2[:batch_size]
                     txt_fts_0 = torch.cat((txt_fts_1_0,txt_fts_2_0), -1)
                 else:
@@ -590,12 +618,10 @@ class StyleGAN2Loss(Loss):
         loss_Dgen = 0
         if do_Dmain:
             with torch.autograd.profiler.record_function('Dgen_forward'):
-                if structure == 4:
-                    gen_img, _ = self.run_G(gen_z, gen_c, txt_fts=torch.cat((txt_fts_, txt_fts_2), -1), sync=False)
-                    gen_logits, _, _ = self.run_D(gen_img, gen_c, sync=False, fts=torch.cat((txt_fts_, txt_fts_2), -1), structure=structure)
-                else:
-                    gen_img, _ = self.run_G(gen_z, gen_c, txt_fts=txt_fts_, sync=False)
-                    gen_logits, _ = self.run_D(gen_img, gen_c, sync=False, fts=txt_fts_, structure=structure) # Gets synced by loss_Dreal.
+                gen_img, _ = self.run_G(gen_z, gen_c, txt_fts=txt_fts_, sync=False)
+                rt = self.run_D(gen_img, gen_c, sync=False, fts=txt_fts_, structure=structure) # Gets synced by loss_Dreal.
+                gen_logits = rt[0]
+
                 training_stats.report('Loss/scores/fake', gen_logits)
                 training_stats.report('Loss/signs/fake', gen_logits.sign())
                 loss_Dgen = torch.nn.functional.softplus(gen_logits) # -log(1 - sigmoid(gen_logits))
@@ -609,7 +635,7 @@ class StyleGAN2Loss(Loss):
             with torch.autograd.profiler.record_function(name + '_forward'):
                 real_img_tmp = real_img.detach().requires_grad_(do_Dr1)
                 if structure == 4:
-                    real_logits, real_d_fts, real_d_fts_2 = self.run_D(real_img_tmp, real_c, sync=sync, fts=torch.cat((txt_fts_, txt_fts_2), -1), structure=structure)
+                    real_logits, real_d_fts, real_d_fts_2 = self.run_D(real_img_tmp, real_c, sync=sync, fts=txt_fts_, structure=structure)
                 else:
                     real_logits, real_d_fts = self.run_D(real_img_tmp, real_c, sync=sync, fts=txt_fts_, structure=structure)
                 training_stats.report('Loss/scores/real', real_logits)
@@ -638,3 +664,28 @@ class StyleGAN2Loss(Loss):
 
             with torch.autograd.profiler.record_function(name + '_backward'):
                 (real_logits * 0 + loss_Dreal + loss_Dr1).mean().mul(gain).backward()
+
+        if do_Mmain or do_M2main: # must under use_fmri condition (set in training_loop)
+            gen_img, _ = self.run_G(gen_z, gen_c, txt_fts=txt_fts_, sync=(sync and not do_Gpl)) # May get synced by Gpl.
+            rt = self.run_D(gen_img, gen_c, sync=False, fts=txt_fts_, structure=structure)
+            loss_GD = torch.nn.functional.softplus(-rt[0]) # -log(sigmoid(gen_logits))
+
+            if do_Mmain:
+                with torch.autograd.profiler.record_function('Mmain_forward'):
+                    # first branch's gt is clip_img
+                    img_fts_all = gather_tensor(img_fts, gather)
+                    loss_M = self.mse_cos_contra_loss(temp, txt_fts_all, img_fts_all, lam)
+                    loss_M = loss_M + loss_GD.mean()
+
+                with torch.autograd.profiler.record_function('Mmain_backward'):
+                    loss_M.mul(gain).backward()
+
+            if do_M2main:
+                with torch.autograd.profiler.record_function('M2main_forward'):
+                    # second branch's gt is clip_cap
+                    txt_fts_gt_all = gather_tensor(txt_fts_gt, gather)
+                    loss_M2 = self.mse_cos_contra_loss(temp, txt_fts_all, txt_fts_gt_all, lam)
+                    loss_M2 = loss_M2 + loss_GD.mean()
+
+                with torch.autograd.profiler.record_function('M2main_backward'):
+                    loss_M2.mul(gain).backward()

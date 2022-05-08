@@ -91,7 +91,7 @@ def save_image_grid(img, fname, drange, grid_size):
 def training_loop(
     run_dir                 = '.',      # Output directory.
     training_set_kwargs     = {},       # Options for training set.
-    testing_set_kwargs     = {},       # Options for training set.
+    testing_set_kwargs     = {},        # Options for training set.
     data_loader_kwargs      = {},       # Options for torch.utils.data.DataLoader.
     G_kwargs                = {},       # Options for generator network.
     D_kwargs                = {},       # Options for discriminator network.
@@ -100,6 +100,8 @@ def training_loop(
     # M_kwargs                = {},
     G_opt_kwargs            = {},       # Options for generator optimizer.
     D_opt_kwargs            = {},       # Options for discriminator optimizer.
+    fmri_vec_opt_kwargs     = {},       # Options for mapper optimizer.
+    fmri_vec2_opt_kwargs    = {},       # Options for mapper 2 optimizer.
     augment_kwargs          = None,     # Options for augmentation pipeline. None = disable.
     loss_kwargs             = {},       # Options for loss function.
     metrics                 = [],       # Metrics to evaluate during training.
@@ -112,6 +114,8 @@ def training_loop(
     ema_rampup              = None,     # EMA ramp-up coefficient.
     G_reg_interval          = 4,        # How often to perform regularization for G? None = disable lazy regularization.
     D_reg_interval          = 16,       # How often to perform regularization for D? None = disable lazy regularization.
+    fmri_vec_reg_interval   = 10,       #### TODO: currently no reg on mapper, just for placeholding
+    fmri_vec2_reg_interval  = 10,
     augment_p               = 0,        # Initial value of augmentation probability.
     ada_target              = None,     # ADA target value. None = fixed p.
     ada_interval            = 4,        # How often to perform ADA adjustment?
@@ -180,8 +184,8 @@ def training_loop(
         # first time only, remove afterwards
         # misc.load_trained_model('/home/sikun/bold5k/data/weights/fmri_clipcapnorm_mse_cos_thr_noBN_0.19923493794099553.pth', fmri_vec) # cap
         # misc.load_trained_model('/home/sikun/bold5k/data/weights/fmri_clipcapnorm_mse_cos_contra_thr_noBN_2.3636860251426697.pth', fmri_vec) # cap with contra
-        # misc.load_trained_model('/home/sikun/bold5k/data/weights/fmri_clipnorm_mse_cos_aug_thr_noBN_0.19915693834072024.pth', fmri_vec) # img
-        misc.load_trained_model('/home/sikun/bold5k/data/weights/fmri_clipnorm_mse_cos_contra_aug_thr_noBN_2.3462039679288864.pth', fmri_vec) # img with contra
+        misc.load_trained_model('/home/sikun/bold5k/data/weights/fmri_clipnorm_mse_cos_aug_thr_noBN_0.19915693834072024.pth', fmri_vec) # img
+        # misc.load_trained_model('/home/sikun/bold5k/data/weights/fmri_clipnorm_mse_cos_contra_aug_thr_noBN_2.3462039679288864.pth', fmri_vec) # img with contra
         fmri_vec.to(torch.double)
         if structure == 4:
             fmri_vec2 = dnnlib.util.construct_class_by_name(**mapper2_kwargs).train().requires_grad_(False).to(device) # subclass of torch.nn.Module
@@ -265,8 +269,12 @@ def training_loop(
     loss = dnnlib.util.construct_class_by_name(device=device, **ddp_modules, **loss_kwargs) # subclass of training.loss.Loss
     phases = []
 
-    # TODO: add mapper m_opt_kwargs
-    for name, module, opt_kwargs, reg_interval in [('G', G, G_opt_kwargs, G_reg_interval), ('D', D, D_opt_kwargs, D_reg_interval)]:
+    nm_pairs = [('G', G, G_opt_kwargs, G_reg_interval), ('D', D, D_opt_kwargs, D_reg_interval)]
+    if use_fmri: # set to if False if freeze mappers
+        nm_pairs.append(('M', fmri_vec, fmri_vec_opt_kwargs, fmri_vec_reg_interval))
+        if structure == 4:
+            nm_pairs.append(('M2', fmri_vec2, fmri_vec2_opt_kwargs, fmri_vec2_reg_interval))
+    for name, module, opt_kwargs, reg_interval in nm_pairs:
         if reg_interval is None:
             opt = dnnlib.util.construct_class_by_name(params=module.parameters(), **opt_kwargs) # subclass of torch.optim.Optimizer
             phases += [dnnlib.EasyDict(name=name+'both', module=module, opt=opt, interval=1)]
@@ -417,7 +425,7 @@ def training_loop(
                     gain = phase.interval
                     loss.accumulate_gradients(phase=phase.name, real_img=real_img, real_c=real_c, gen_z=gen_z, gen_c=gen_c,
                         sync=sync, gain=gain, img_fts=real_img_feature, lam=lam, temp=temp, gather=gather, d_use_fts=d_use_fts,
-                        itd=itd, itc=itc, iid=iid, iic=iic, mixing_prob=mixing_prob, txt_fts=None, fmri=fmri,
+                        itd=itd, itc=itc, iid=iid, iic=iic, mixing_prob=mixing_prob, txt_fts=real_txt_feature, fmri=fmri,
                         structure=structure, f_dim=f_dim, f_dim2=f_dim2)
             else:
                 for round_idx, (real_img, real_c, gen_z, gen_c, real_img_feature, real_txt_feature) in enumerate(zip(phase_real_img, phase_real_c, phase_gen_z, phase_gen_c, phase_img_features, phase_txt_features)):

@@ -7,13 +7,22 @@ from torch_utils.ops import conv2d_resample
 from torch_utils.ops import upfirdn2d
 from torch_utils.ops import bias_act
 from torch_utils.ops import fma
-
+# import matplotlib.pyplot as plt
 #----------------------------------------------------------------------------
 
 @misc.profiled_function
 def normalize_2nd_moment(x, dim=1, eps=1e-8):
     return x * (x.square().mean(dim=dim, keepdim=True) + eps).rsqrt()
 
+@misc.profiled_function
+def signed_max(x, y):
+    maxs = torch.max(torch.abs(x), torch.abs(y))
+
+    xSigns = (maxs == torch.abs(x)) * torch.sign(x)
+    ySigns = (maxs == torch.abs(y)) * torch.sign(y)
+    finalSigns = xSigns.int() | ySigns.int()
+
+    return maxs * finalSigns
 #----------------------------------------------------------------------------
 
 @misc.profiled_function
@@ -439,7 +448,7 @@ class SynthesisLayer(torch.nn.Module):  # <-- added (change)
             self.register_buffer('noise_const', torch.randn([resolution, resolution]))
             self.noise_strength = torch.nn.Parameter(torch.zeros([]))
         self.bias = torch.nn.Parameter(torch.zeros([out_channels]))
-        
+
     def forward(self, x, w, fts, styles=None, noise_mode='random', fused_modconv=True, gain=1):
         assert noise_mode in ['random', 'const', 'none']
         in_resolution = self.resolution // self.up
@@ -476,8 +485,17 @@ class SynthesisLayer(torch.nn.Module):  # <-- added (change)
                 fts1 = self.pre_1(fts1)
                 fts2 = self.pre_01(fts2)
                 fts2 = self.pre_11(fts2)
+
                 # styles = self.affine_1(torch.cat([fts1, fts2, w], dim=-1))
-                styles = self.affine_0(torch.cat([torch.max(fts1, fts2), w], dim=-1))
+                # fts = signed_max(fts1, fts2)
+                # fts = 0.5 * (fts1 + fts2)
+                fts = torch.max(fts1, fts2)
+                # plt.plot(fts1[0].detach().cpu().numpy(), label='fts1')
+                # plt.plot(fts2[0].detach().cpu().numpy(), label='fts1')
+                # plt.plot(fts[0].detach().cpu().numpy(), label='fts')
+                # plt.legend()
+                # plt.show()
+                styles = self.affine_0(torch.cat([fts, w], dim=-1))
 
             else:
                 raise('structure undefined')
@@ -591,7 +609,10 @@ class ToRGBLayer(torch.nn.Module):
                 fts2 = self.pre_01(fts2)
                 fts2 = self.pre_11(fts2)
                 # styles = self.affine_1(torch.cat([fts1, fts2, w], dim=-1))
-                styles = self.affine_0(torch.cat([torch.max(fts1, fts2), w], dim=-1))
+                # fts = signed_max(fts1, fts2)
+                # fts = 0.5 * (fts1 + fts2)
+                fts = torch.max(fts1, fts2)
+                styles = self.affine_0(torch.cat([fts, w], dim=-1))
 
             else:
                 raise('structure undefined')                

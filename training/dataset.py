@@ -345,7 +345,7 @@ class ImageFolderDataset(Dataset):
         clip_features = dict(clip_features)
         clip_features = [clip_features[fname.replace('\\', '/')] for fname in self._image_fnames]
         clip_features = np.array(clip_features)
-        clip_features = clip_features.astype(np.float32)
+        clip_features = clip_features.astype(np.float64)
         return clip_features[raw_idx]
 
     def _load_clip_txt_features(self, raw_idx):
@@ -451,7 +451,7 @@ class NsdClipDataset(Dataset):
             clip_features = json.load(f)[self._get_clip_id(raw_idx)]
 
         clip_features = np.array(clip_features)
-        clip_features = clip_features.astype(np.float32)
+        clip_features = clip_features.astype(np.float64)
 
         return clip_features
 
