@@ -274,19 +274,21 @@ def setup_training_loop_kwargs(
         spec.mbstd = min(spec.mb // gpus, 4) # other hyperparams behave more predictably if mbstd group size remains fixed
         spec.fmaps = 1 if res >= 512 else fmap
         spec.lrate = 0.002 if res >= 1024 else 0.0025
+        spec.lrate *= 0.9
         spec.gamma = 0.0002 * (res ** 2) / spec.mb # heuristic formula
         spec.ema = spec.mb * 10 / 32
         
     # args.M_kwargs = dnnlib.EasyDict(class_name='training.networks.ManiNetwork', z_dim=args.f_dim,  layer_features=args.f_dim, w_dim=512, num_layers=8)
+    m_layer_features = args.f_dim + args.f_dim2 if args.structure == 4 else args.f_dim
     args.G_kwargs = dnnlib.EasyDict(class_name='training.networks.Generator', z_dim=512, w_dim=512,
-        m_layer_features=args.f_dim+args.f_dim2, m_num_layers=8, mapping_kwargs=dnnlib.EasyDict(),
+        m_layer_features=m_layer_features, m_num_layers=8, mapping_kwargs=dnnlib.EasyDict(),
         synthesis_kwargs=dnnlib.EasyDict(structure=args.structure))
     args.D_kwargs = dnnlib.EasyDict(class_name='training.networks.Discriminator', use_norm=args.d_use_norm,
         use_fts=args.d_use_fts, block_kwargs=dnnlib.EasyDict(), mapping_kwargs=dnnlib.EasyDict(),
         epilogue_kwargs=dnnlib.EasyDict(structure=args.structure))
     if args.use_fmri:
         args.mapper_kwargs = dnnlib.EasyDict(class_name='training.networks.FmriVecMapper', fmri_len=fmri_len, f_dim=args.f_dim)
-        if args.structure == 4:
+        if args.structure in [4, 5]:
             # used for resnet vec, hardcoded params
             args.mapper2_kwargs = dnnlib.EasyDict(class_name='training.networks.FmriVecMapper', fmri_len=fmri_len, f_dim=args.f_dim2) # fmri_clip
             # args.mapper2_kwargs = dnnlib.EasyDict(class_name='training.networks.FmriVecMapper', fmri_len=fmri_len, f_dim=args.f_dim2, num_layers=2, fc_hdim=256, last_activation=True) # resnet
@@ -307,7 +309,7 @@ def setup_training_loop_kwargs(
     args.D_opt_kwargs = dnnlib.EasyDict(class_name='torch.optim.Adam', lr=spec.lrate, betas=[0,0.99], eps=1e-8)
     if args.use_fmri:
         args.fmri_vec_opt_kwargs = dnnlib.EasyDict(class_name='torch.optim.Adam', lr=spec.lrate, betas=[0,0.99], eps=1e-8)
-        if args.structure == 4:
+        if args.structure in [4, 5]:
             args.fmri_vec2_opt_kwargs = dnnlib.EasyDict(class_name='torch.optim.Adam', lr=spec.lrate, betas=[0,0.99], eps=1e-8)
     args.loss_kwargs = dnnlib.EasyDict(class_name='training.loss.StyleGAN2Loss', r1_gamma=spec.gamma, use_fmri=args.use_fmri)
 

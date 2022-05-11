@@ -184,10 +184,10 @@ def training_loop(
         # first time only, remove afterwards
         # misc.load_trained_model('/home/sikun/bold5k/data/weights/fmri_clipcapnorm_mse_cos_thr_noBN_0.19923493794099553.pth', fmri_vec) # cap
         # misc.load_trained_model('/home/sikun/bold5k/data/weights/fmri_clipcapnorm_mse_cos_contra_thr_noBN_2.3636860251426697.pth', fmri_vec) # cap with contra
-        misc.load_trained_model('/home/sikun/bold5k/data/weights/fmri_clipnorm_mse_cos_aug_thr_noBN_0.19915693834072024.pth', fmri_vec) # img
+        # misc.load_trained_model('/home/sikun/bold5k/data/weights/fmri_clipnorm_mse_cos_aug_thr_noBN_0.19915693834072024.pth', fmri_vec) # img
         # misc.load_trained_model('/home/sikun/bold5k/data/weights/fmri_clipnorm_mse_cos_contra_aug_thr_noBN_2.3462039679288864.pth', fmri_vec) # img with contra
         fmri_vec.to(torch.double)
-        if structure == 4:
+        if structure in [4, 5]:
             fmri_vec2 = dnnlib.util.construct_class_by_name(**mapper2_kwargs).train().requires_grad_(False).to(device) # subclass of torch.nn.Module
             # first time only, remove afterwards
             # misc.load_trained_model('/home/sikun/bold5k/data/weights/fmri_dnn_noBN_0.010493216838130332.pth', fmri_vec2)
@@ -202,7 +202,7 @@ def training_loop(
         nm_pairs = [('G', G), ('D', D), ('G_ema', G_ema)]
         if use_fmri:
             nm_pairs.append(('fmri_vec', fmri_vec))
-            if structure == 4:
+            if structure in [4, 5]:
                 nm_pairs.append(('fmri_vec2', fmri_vec2))
         for name, module in nm_pairs:
             print(name, module)
@@ -231,7 +231,10 @@ def training_loop(
     if rank == 0:
         z = torch.empty([batch_gpu, G.z_dim], device=device)
         c = torch.empty([batch_gpu, G.c_dim], device=device)
-        fts = torch.empty([batch_gpu, f_dim+f_dim2], device=device)
+        if structure == 4:
+            fts = torch.empty([batch_gpu, f_dim+f_dim2], device=device)
+        else:
+            fts = torch.empty([batch_gpu, f_dim], device=device)
         img = misc.print_module_summary(G, [z, c])
         misc.print_module_summary(D, [img, c, fts])
 
@@ -253,7 +256,7 @@ def training_loop(
     nm_pairs = [('G_mapping', G.mapping), ('G_synthesis', G.synthesis), ('G_mani', G.mani), ('D', D), (None, G_ema), ('augment_pipe', augment_pipe)]
     if use_fmri:
         nm_pairs.append(('fmri_vec', fmri_vec))
-        if structure == 4:
+        if structure in [4, 5]:
             nm_pairs.append(('fmri_vec2', fmri_vec2))
     for name, module in nm_pairs:
         if (num_gpus > 1) and (module is not None) and len(list(module.parameters())) != 0:
@@ -270,9 +273,10 @@ def training_loop(
     phases = []
 
     nm_pairs = [('G', G, G_opt_kwargs, G_reg_interval), ('D', D, D_opt_kwargs, D_reg_interval)]
-    if use_fmri: # set to if False if freeze mappers
+    # if use_fmri: # set to if False if freeze mappers (todo)
+    if False:
         nm_pairs.append(('M', fmri_vec, fmri_vec_opt_kwargs, fmri_vec_reg_interval))
-        if structure == 4:
+        if structure in [4, 5]:
             nm_pairs.append(('M2', fmri_vec2, fmri_vec2_opt_kwargs, fmri_vec2_reg_interval))
     for name, module, opt_kwargs, reg_interval in nm_pairs:
         if reg_interval is None:
@@ -562,7 +566,7 @@ def training_loop(
             nm_pairs = [('G', G), ('D', D), ('G_ema', G_ema), ('augment_pipe', augment_pipe)]
             if use_fmri:
                 nm_pairs.append(('fmri_vec', fmri_vec))
-                if structure == 4:
+                if structure in [4, 5]:
                     nm_pairs.append(('fmri_vec2', fmri_vec2))
             for name, module in nm_pairs:
                 if module is not None:

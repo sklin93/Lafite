@@ -419,7 +419,7 @@ class SynthesisLayer(torch.nn.Module):  # <-- added (change)
             self.bias_layer_1 = FullyConnectedLayer(_f_dim, 512, activation='lrelu', lr_multiplier=0.01)#wed
             self.bias_layer_2 = FullyConnectedLayer(512, in_channels,)#, lr_multiplier=0.01)#wed
 
-        elif self.structure == 2:
+        elif self.structure in [2, 5]:
             self.pre_0 = FullyConnectedLayer(f_dim, _f_dim, activation='lrelu', lr_multiplier=0.01) # pre process text features  
             self.pre_1 = FullyConnectedLayer(_f_dim, 512, activation='lrelu', lr_multiplier=0.01)
             self.affine_0 = FullyConnectedLayer(w_dim+512, in_channels, bias_init=1)# f([w, txt])
@@ -470,7 +470,7 @@ class SynthesisLayer(torch.nn.Module):  # <-- added (change)
                 biases = self.bias_layer_2(biases)
                 styles = self.affine(w)
                 styles = biases + styles*scales
-            elif self.structure == 2:
+            elif self.structure in [2, 5]:
                 fts = self.pre_0(fts)
                 fts = self.pre_1(fts)
                 styles = self.affine_0(torch.cat([fts, w], dim=-1))
@@ -547,7 +547,7 @@ class ToRGBLayer(torch.nn.Module):
             self.bias_layer_1 = FullyConnectedLayer(_f_dim, 512, activation='lrelu', lr_multiplier=0.01)#wed
             self.bias_layer_2 = FullyConnectedLayer(512, in_channels,)#, lr_multiplier=0.01)#wed
 
-        elif self.structure == 2:
+        elif self.structure in [2, 5]:
             self.pre_0 = FullyConnectedLayer(f_dim, _f_dim, activation='lrelu', lr_multiplier=0.01) # pre process text features  
             self.pre_1 = FullyConnectedLayer(_f_dim, 512, activation='lrelu', lr_multiplier=0.01)   
             self.affine_0 = FullyConnectedLayer(w_dim+512, in_channels, bias_init=1)# f([w, txt])
@@ -593,7 +593,7 @@ class ToRGBLayer(torch.nn.Module):
                 biases = self.bias_layer_2(biases)
                 styles = self.affine(w)
                 styles = biases + styles*scales
-            elif self.structure == 2:
+            elif self.structure in [2, 5]:
                 fts = self.pre_0(fts)
                 fts = self.pre_1(fts)
                 styles = self.affine_0(torch.cat([fts, w], dim=-1))

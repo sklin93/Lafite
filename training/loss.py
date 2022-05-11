@@ -10,6 +10,7 @@ import torchvision.transforms as T
 import clip
 import dnnlib
 import random
+from training.networks import signed_max
 # import matplotlib.pyplot as plt
 # import CLIP.clip as clip
 import sys
@@ -256,6 +257,9 @@ class StyleGAN2Loss(Loss):
         # self.mapper.load_state_dict(torch.load('./implicit.0.001.64.True.0.0.pth', map_location='cpu')) # path to the noise mapping network
         # self.mapper.to(device)
         self.use_fmri = use_fmri
+        self.resloss = True  # TODO: change to another bool param in train, no time for now
+        self.resloss_i = 10  # TODO: change to another int param in train
+
         if use_fmri:
             assert fmri_vec is not None, 'must provide mapper model if use fmri for end to end traing'
             self.fmri_vec = fmri_vec
@@ -266,6 +270,10 @@ class StyleGAN2Loss(Loss):
                     self.return_layer = 2
                     resnet, _ = resnet50(layer=self.return_layer, zero_init_residual=True)
                     self.resnet = resnet.to(device).eval()
+        if self.resloss:
+            self.return_layer = 2
+            resnet, _ = resnet50(layer=self.return_layer, zero_init_residual=True)
+            self.resnet = resnet.to(device).eval()
 
     def run_G(self, z, c, sync, txt_fts=None, ):
         with misc.ddp_sync(self.G_mapping, sync):
@@ -294,6 +302,16 @@ class StyleGAN2Loss(Loss):
             with misc.ddp_sync(self.D, sync):
                 logits, d_fts = self.D(img, c, fts=fts)
             return logits, d_fts
+
+    def run_res(self, x):
+        _x = self.full_preprocess(x, ratio=1.0, fix_size=128)
+        img_vec = self.resnet(_x, chan_avg=False, return_layer=self.return_layer)
+        # with torch.no_grad():
+            # img_vec = self.resnet(_x, chan_avg=False, return_layer=self.return_layer)
+        max_vec = img_vec.max(1)[0]
+        mean_vec = img_vec.mean(1)
+        img_vec = max_vec / max_vec.max() + 2 * mean_vec / mean_vec.max()
+        return img_vec.flatten(start_dim=1)
 
     def normalize(self):
         return T.Compose([
@@ -345,7 +363,8 @@ class StyleGAN2Loss(Loss):
     def contra_loss(self, temp, mat1, mat2, lam):
         sim = torch.cosine_similarity(mat1.unsqueeze(1), mat2.unsqueeze(0), dim=-1)
         if temp > 0.:
-            sim = torch.exp(sim/temp) # TODO: This implementation is incorrect, it should be sim=sim/temp. change hp
+            # sim = torch.exp(sim/temp) # TODO: This implementation is incorrect, it should be sim=sim/temp. change hp
+            sim = sim/temp
             # However, this incorrect implementation can reproduce our results with provided hyper-parameters.
             # If you want to use the correct implementation, please manually revise it.
             # The correct implementation should lead to better results, but don't use our provided hyper-parameters, you need to carefully tune lam, temp, itd, itc and other hyper-parameters
@@ -398,6 +417,10 @@ class StyleGAN2Loss(Loss):
 
                 # txt_fts = torch.cat((txt_fts, txt_fts_2), -1)
                 # txt_fts_gt2 = None
+            if structure == 5:
+                txt_fts_2 = self.fmri_vec2(fmri)
+                txt_fts = signed_max(txt_fts, txt_fts_2)
+
         else:
             # Use_fmri==False case the conditions are concatenated, separate them here
             if self.structure == 4 and len(txt_fts) > f_dim:
@@ -530,14 +553,7 @@ class StyleGAN2Loss(Loss):
                     if structure == 4:
                         # If using different model like resnet, use contra_loss(temp, resnet(normed_gen_full_img), txt_fts_2_all, lam)
                         if self.vec2_res:
-                            normed_gen_full_img2 = self.full_preprocess(gen_img, ratio=1.0, fix_size=128)
-                            img_vec = self.resnet(normed_gen_full_img2, chan_avg=False, return_layer=self.return_layer)
-                            # with torch.no_grad():
-                                # img_vec = self.resnet(normed_gen_full_img2, chan_avg=False, return_layer=self.return_layer)
-                            max_vec = img_vec.max(1)[0]
-                            mean_vec = img_vec.mean(1)
-                            img_vec = max_vec / max_vec.max() + 2 * mean_vec / mean_vec.max()
-                            img_vec = img_vec.flatten(start_dim=1)
+                            img_vec = self.run_res(gen_img)
                             # to 0 - 1
                             img_vec -= 0.67
                             img_vec /= 2.33
@@ -579,6 +595,17 @@ class StyleGAN2Loss(Loss):
                             _, g_real_d_fts = self.run_D(real_img.detach(), real_c, sync=False, fts=txt_fts_, structure=structure)
                         g_real_d_fts_all = gather_tensor(g_real_d_fts, gather)
                         loss_Gmain = loss_Gmain - img_img_d*self.contra_loss(temp, g_real_d_fts_all, gen_d_fts_all, lam).mean()
+
+                if self.resloss:
+                    img_vec_gen = self.run_res(gen_img)
+                    img_vec_real = self.run_res(real_img.detach())
+                    img_vec_gen_all = gather_tensor(img_vec_gen, gather)
+                    img_vec_real_all = gather_tensor(img_vec_real, gather)
+                    # plt.plot(img_vec_real_all[0].detach().cpu().numpy(), label='real')
+                    # plt.plot(img_vec_gen_all[0].detach().cpu().numpy(), label='gen')
+                    # plt.legend()
+                    # plt.show()
+                    loss_Gmain = loss_Gmain - self.resloss_i * self.contra_loss(temp, img_vec_real_all, img_vec_gen_all, lam).mean()
 
                 training_stats.report('Loss/G/loss', loss_Gmain)
             with torch.autograd.profiler.record_function('Gmain_backward'):
@@ -668,7 +695,7 @@ class StyleGAN2Loss(Loss):
         if do_Mmain or do_M2main: # must under use_fmri condition (set in training_loop)
             gen_img, _ = self.run_G(gen_z, gen_c, txt_fts=txt_fts_, sync=(sync and not do_Gpl)) # May get synced by Gpl.
             rt = self.run_D(gen_img, gen_c, sync=False, fts=txt_fts_, structure=structure)
-            loss_GD = torch.nn.functional.softplus(-rt[0]) # -log(sigmoid(gen_logits))
+            loss_GD = 0.1 * torch.nn.functional.softplus(-rt[0]) # -log(sigmoid(gen_logits))
 
             if do_Mmain:
                 with torch.autograd.profiler.record_function('Mmain_forward'):
