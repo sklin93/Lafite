@@ -141,12 +141,14 @@ def training_loop(
     itc                     = 10.,
     iid                     = 0.,
     iic                     = 0.,
+    ires                    = 10.,
     metric_only_test        = False,
     finetune                = False,
     ratio                   = 1.,
     use_fmri                = False,
     structure               = 2,
     enabled_forced_map      = False,
+    resloss                 = False,
 ):
     # Initialize.
     start_time = time.time()
@@ -191,7 +193,7 @@ def training_loop(
             fmri_vec2 = dnnlib.util.construct_class_by_name(**mapper2_kwargs).train().requires_grad_(False).to(device) # subclass of torch.nn.Module
             # first time only, remove afterwards
             # misc.load_trained_model('/home/sikun/bold5k/data/weights/fmri_dnn_noBN_0.010493216838130332.pth', fmri_vec2)
-            misc.load_trained_model('/home/sikun/bold5k/data/weights/fmri_clipcapnorm_mse_cos_contra_thr_noBN_2.3636860251426697.pth', fmri_vec2) # cap with contra
+            # misc.load_trained_model('/home/sikun/bold5k/data/weights/fmri_clipcapnorm_mse_cos_contra_thr_noBN_2.3636860251426697.pth', fmri_vec2) # cap with contra
             fmri_vec2.to(torch.double)
 
     # Resume from existing pickle.

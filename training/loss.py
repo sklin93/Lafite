@@ -237,7 +237,7 @@ def resnet50(layer=2, pretrained=True, **kwargs):
 class StyleGAN2Loss(Loss):
     def __init__(self, device, G_mapping, G_synthesis, G_mani, D, augment_pipe=None, style_mixing_prob=0.9,
         r1_gamma=10, pl_batch_shrink=2, pl_decay=0.01, pl_weight=2, use_fmri=False, fmri_vec=None, fmri_vec2=None,
-        vec2_res=False): # vec2_dnn controls if the separate condition branch is using resnet vec
+        resloss=False, ires=10, vec2_res=False): # vec2_dnn controls if the separate condition branch is using resnet vec
         super().__init__()
         self.device = device
         self.G_mapping = G_mapping
@@ -257,8 +257,8 @@ class StyleGAN2Loss(Loss):
         # self.mapper.load_state_dict(torch.load('./implicit.0.001.64.True.0.0.pth', map_location='cpu')) # path to the noise mapping network
         # self.mapper.to(device)
         self.use_fmri = use_fmri
-        self.resloss = True  # TODO: change to another bool param in train, no time for now
-        self.resloss_i = 10  # TODO: change to another int param in train
+        self.resloss = resloss
+        self.ires = ires
 
         if use_fmri:
             assert fmri_vec is not None, 'must provide mapper model if use fmri for end to end traing'
@@ -605,7 +605,7 @@ class StyleGAN2Loss(Loss):
                     # plt.plot(img_vec_gen_all[0].detach().cpu().numpy(), label='gen')
                     # plt.legend()
                     # plt.show()
-                    loss_Gmain = loss_Gmain - self.resloss_i * self.contra_loss(temp, img_vec_real_all, img_vec_gen_all, lam).mean()
+                    loss_Gmain = loss_Gmain - self.ires * self.contra_loss(temp, img_vec_real_all, img_vec_gen_all, lam).mean()
 
                 training_stats.report('Loss/G/loss', loss_Gmain)
             with torch.autograd.profiler.record_function('Gmain_backward'):

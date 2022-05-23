@@ -27,6 +27,7 @@ def setup_training_loop_kwargs(
     fmri_len   = 15744,
     structure  = 2,
     enabled_forced_map = False, # whether to copy the same weights to different pre_0 and pre_1 branches or not
+    resloss    = False,
     d_use_norm = None, # normalize the feature extracted by discriminator or not
     d_use_fts  = None, # discriminator extract semantic feature or not
     mixing_prob= None, # mixing probability of ground-truth and language-free generated pairs, mixing_prob=0 means only use ground-truth, mixing_prob=1. means using only pseudo pairs(language-free)
@@ -39,6 +40,7 @@ def setup_training_loop_kwargs(
     itc        = None, # hyper-parameter for contrastive loss
     iid        = None, # hyper-parameter for contrastive loss
     iic        = None, # hyper-parameter for contrastive loss
+    ires       = 10,   # hyper-parameter for resnet vector contrastive loss
     metric_only_test = None, # hyper-parameter for computing metrics
     fmap       = None, # hyper-parameter for architecture, related to channel number
     ratio      = None,
@@ -91,6 +93,11 @@ def setup_training_loop_kwargs(
         f_dim2 = 0
     assert isinstance(f_dim2, int)
     args.f_dim2 = f_dim2
+
+    if resloss is None:
+        resloss = False
+    assert isinstance(resloss, bool)
+    args.resloss = resloss
 
     if structure is None:
         structure = 2
@@ -150,6 +157,9 @@ def setup_training_loop_kwargs(
     if iic is None:
         iic = 0.
     args.iic = iic
+    if ires is None:
+        ires = 10.
+    args.ires = ires
 
     if change is None:
         change = 256
@@ -274,7 +284,7 @@ def setup_training_loop_kwargs(
         spec.mbstd = min(spec.mb // gpus, 4) # other hyperparams behave more predictably if mbstd group size remains fixed
         spec.fmaps = 1 if res >= 512 else fmap
         spec.lrate = 0.002 if res >= 1024 else 0.0025
-        spec.lrate *= 0.9
+        # spec.lrate = spec.lrate * 0.9
         spec.gamma = 0.0002 * (res ** 2) / spec.mb # heuristic formula
         spec.ema = spec.mb * 10 / 32
         
@@ -311,7 +321,8 @@ def setup_training_loop_kwargs(
         args.fmri_vec_opt_kwargs = dnnlib.EasyDict(class_name='torch.optim.Adam', lr=spec.lrate, betas=[0,0.99], eps=1e-8)
         if args.structure in [4, 5]:
             args.fmri_vec2_opt_kwargs = dnnlib.EasyDict(class_name='torch.optim.Adam', lr=spec.lrate, betas=[0,0.99], eps=1e-8)
-    args.loss_kwargs = dnnlib.EasyDict(class_name='training.loss.StyleGAN2Loss', r1_gamma=spec.gamma, use_fmri=args.use_fmri)
+    args.loss_kwargs = dnnlib.EasyDict(class_name='training.loss.StyleGAN2Loss', r1_gamma=spec.gamma, use_fmri=args.use_fmri,
+        resloss=args.resloss, ires=args.ires)
 
     args.total_kimg = spec.kimg
     args.batch_size = spec.mb
@@ -548,6 +559,8 @@ class CommaSeparatedList(click.ParamType):
 @click.option('--ratio', help='ratio of data with ground-truth text used', type=float)
 @click.option('--cond_vec', help='how the condition vector is provided and/or mixed', type=click.Choice(['img', 'cap', 'add', 'cat', 'mix']))
 @click.option('--use_fmri', help='whether to load fmri signals, set to True if doing end to end training', type=bool, metavar='BOOL')
+@click.option('--resloss', help='whether to use resnet vector contrastive loss', type=bool, metavar='BOOL')
+@click.option('--ires', help='hyper-parameter of resnet vector contrastive loss', type=float)
 
 # General options.
 @click.option('--outdir', help='Where to save the results', required=True, metavar='DIR')
